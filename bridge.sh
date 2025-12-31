@@ -42,46 +42,42 @@ if ! command -v jq &> /dev/null; then
 fi
 
 find_droid_window() {
-    # Try Terminal.app first
-    TERMINAL_WINDOWS=$(osascript -e 'tell application "Terminal" to get name of every window' 2>/dev/null)
+    local thread_id="${1:-}"
     
-    # Look for window with "droid" in the name
-    if echo "$TERMINAL_WINDOWS" | grep -qi "droid"; then
-        # Find the index of the droid window
-        INDEX=$(osascript <<'EOF'
-tell application "Terminal"
-    set windowList to every window
-    repeat with i from 1 to count of windowList
-        set winName to name of item i of windowList
-        if winName contains "droid" then
-            return {app:"Terminal", index:i}
-        end if
-    end repeat
-end tell
-return "not_found"
-EOF
-)
-        if [[ "$INDEX" != "not_found" ]]; then
-            echo "Terminal"
-            return 0
-        fi
+    # Require thread_id - no fallback to generic windows
+    if [[ -z "$thread_id" ]]; then
+        echo "not_found"
+        return 1
     fi
     
-    # Try iTerm2
-    ITERM_WINDOWS=$(osascript -e 'tell application "iTerm" to get name of every window' 2>/dev/null)
+    # Try Terminal.app first - strict match on threadId only
+    TERMINAL_WINDOWS=$(osascript -e 'tell application "Terminal" to get name of every window' 2>/dev/null)
     
-    if echo "$ITERM_WINDOWS" | grep -qi "droid"; then
-        echo "iTerm"
+    if echo "$TERMINAL_WINDOWS" | grep -q "$thread_id"; then
+        echo "Terminal:$thread_id"
         return 0
     fi
     
+    # Try iTerm2 - strict match on threadId only
+    ITERM_WINDOWS=$(osascript -e 'tell application "iTerm" to get name of every window' 2>/dev/null)
+    
+    if echo "$ITERM_WINDOWS" | grep -q "$thread_id"; then
+        echo "iTerm:$thread_id"
+        return 0
+    fi
+    
+    # No fallback - messages only go to their originating session
     echo "not_found"
     return 1
 }
 
 inject_to_terminal() {
     local message="$1"
-    local app="$2"
+    local app_and_term="$2"
+    
+    # Parse app:search_term format
+    local app="${app_and_term%%:*}"
+    local search_term="${app_and_term#*:}"
     
     # Escape special characters for AppleScript
     local escaped_message=$(printf '%s' "$message" | sed 's/\\/\\\\/g; s/"/\\"/g')
@@ -91,7 +87,7 @@ inject_to_terminal() {
 tell application "iTerm"
     set windowList to every window
     repeat with w in windowList
-        if name of w contains "droid" then
+        if name of w contains "$search_term" then
             tell current session of w
                 write text "$escaped_message"
             end tell
@@ -114,7 +110,7 @@ tell application "Terminal"
     set windowList to every window
     repeat with i from 1 to count of windowList
         set w to item i of windowList
-        if name of w contains "droid" then
+        if name of w contains "$search_term" then
             -- Bring window to front
             set frontmost of w to true
             activate
@@ -145,17 +141,9 @@ EOF
 log "Discord-Droid Bridge starting..."
 log "Watching: $INBOX_FILE"
 log "Check interval: ${CHECK_INTERVAL}s"
-log "Will auto-detect Terminal/iTerm window running Droid"
+log "Messages only route to sessions with matching threadId in window title"
 log "Press Ctrl+C to stop"
 echo ""
-
-# Initial check for Droid window
-DROID_APP=$(find_droid_window)
-if [[ "$DROID_APP" == "not_found" ]]; then
-    warn "No Droid window found yet. Will keep checking..."
-else
-    log "Found Droid running in: $DROID_APP"
-fi
 
 while true; do
     # Check if inbox file exists and has content
@@ -164,23 +152,27 @@ while true; do
         UNREAD_COUNT=$(jq -r '.unreadCount // 0' "$INBOX_FILE" 2>/dev/null)
         
         if [[ "$UNREAD_COUNT" -gt 0 ]]; then
-            # Find the droid window
-            DROID_APP=$(find_droid_window)
-            
-            if [[ "$DROID_APP" == "not_found" ]]; then
-                warn "Discord message waiting but no Droid window found!"
-            else
-                # Process each unread message
-                jq -c '.messages[]?' "$INBOX_FILE" 2>/dev/null | while read -r msg; do
-                    MSG_ID=$(echo "$msg" | jq -r '.id')
-                    MSG_CONTENT=$(echo "$msg" | jq -r '.content')
-                    MSG_AUTHOR=$(echo "$msg" | jq -r '.author.username')
-                    MSG_THREAD=$(echo "$msg" | jq -r '.threadName')
+            # Process each unread message
+            jq -c '.messages[]?' "$INBOX_FILE" 2>/dev/null | while read -r msg; do
+                MSG_ID=$(echo "$msg" | jq -r '.id')
+                MSG_CONTENT=$(echo "$msg" | jq -r '.content')
+                MSG_AUTHOR=$(echo "$msg" | jq -r '.author.username')
+                MSG_THREAD=$(echo "$msg" | jq -r '.threadName')
+                MSG_THREAD_ID=$(echo "$msg" | jq -r '.threadId')
+                
+                # Check if already processed
+                if ! grep -q "^${MSG_ID}$" "$PROCESSED_FILE" 2>/dev/null; then
+                    # Find the droid window for this specific thread
+                    DROID_APP=$(find_droid_window "$MSG_THREAD_ID")
                     
-                    # Check if already processed
-                    if ! grep -q "^${MSG_ID}$" "$PROCESSED_FILE" 2>/dev/null; then
-                        log "New message from $MSG_AUTHOR in '$MSG_THREAD'"
+                    if [[ "$DROID_APP" == "not_found" ]]; then
+                        warn "Message for thread $MSG_THREAD_ID but no matching window found"
+                        # Still mark as processed to avoid repeated warnings
+                        echo "$MSG_ID" >> "$PROCESSED_FILE"
+                    else
+                        log "New message from $MSG_AUTHOR in '$MSG_THREAD' (thread: $MSG_THREAD_ID)"
                         info "Content: $MSG_CONTENT"
+                        info "Target: $DROID_APP"
                         
                         # Inject into terminal
                         RESULT=$(inject_to_terminal "$MSG_CONTENT" "$DROID_APP")
@@ -193,8 +185,8 @@ while true; do
                             warn "Failed to inject message"
                         fi
                     fi
-                done
-            fi
+                fi
+            done
         fi
     fi
     

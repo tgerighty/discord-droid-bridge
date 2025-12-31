@@ -39,8 +39,9 @@ An extended version of [slimslenderslacks/mcp-discord](https://github.com/slimsl
 ### 2. bridge.sh (This Repo)
 A background script that:
 - Monitors `~/.factory/discord-inbox.json` for new messages
-- Auto-detects Terminal.app or iTerm2 windows running Droid
-- Injects Discord messages into the active Droid session via clipboard paste
+- Routes messages to the **specific terminal session** that owns the thread (by threadId in window title)
+- Supports multiple concurrent Droid sessions with session isolation
+- Injects Discord messages via clipboard paste (Terminal.app) or direct write (iTerm2)
 - Tracks processed messages to avoid duplicates
 
 ### 3. discord-notify Skill
@@ -141,25 +142,44 @@ nohup ~/discord-droid-bridge/bridge.sh > ~/.factory/bridge.log 2>&1 &
 
 ### In Droid Session
 
-```
-# Create and watch a thread
+```bash
+# 1. Create and watch a thread
 discord_create_thread(channelId: "YOUR_CHANNEL_ID", name: "[project:branch] - 2025-01-01")
 discord_watch_thread(threadId: "RETURNED_THREAD_ID")
 
-# Send a message
+# 2. Set your terminal title to include the threadId for session routing
+# In Terminal.app or iTerm2:
+echo -ne "\033]0;droid-THREAD_ID\007"
+
+# Or use this shell function (add to ~/.zshrc):
+droid-title() { echo -ne "\033]0;droid-$1\007"; }
+# Then: droid-title THREAD_ID
+
+# 3. Send a message
 discord_send_thread_message(threadId: "THREAD_ID", message: "Hello from Droid!")
 
-# Check for messages
+# 4. Check for messages
 discord_get_unread_messages()
 ```
 
 ### From Discord
 
 Simply send a message in the watched thread. The bridge will:
-1. Detect the new message
-2. Find the terminal window running Droid
-3. Paste the message and press Enter
+1. Detect the new message in `~/.factory/discord-inbox.json`
+2. Find the terminal window with the matching **threadId** in its title
+3. Inject the message into **only that session**
 4. Droid processes and responds back to Discord
+
+### Multi-Session Support
+
+Each Droid session can have its own Discord thread. Messages are isolated by threadId:
+
+```
+Terminal 1: title="droid-1234567890"  ←── receives messages from thread 1234567890
+Terminal 2: title="droid-0987654321"  ←── receives messages from thread 0987654321
+```
+
+If no terminal has a matching threadId in its title, the message is logged but not injected.
 
 ## Files
 
