@@ -102,21 +102,28 @@ end tell
 return "not_found"
 EOF
     else
-        # Terminal.app - find the droid window and type into it
+        # Terminal.app - use clipboard paste method (more reliable)
+        # Save current clipboard
+        local old_clipboard=$(pbpaste 2>/dev/null)
+        
+        # Put message in clipboard
+        echo -n "$message" | pbcopy
+        
         osascript <<EOF
 tell application "Terminal"
     set windowList to every window
     repeat with i from 1 to count of windowList
         set w to item i of windowList
         if name of w contains "droid" then
-            -- Bring window to front and type
+            -- Bring window to front
             set frontmost of w to true
-            delay 0.1
+            activate
+            delay 0.3
+            -- Paste from clipboard and press enter
             tell application "System Events"
-                tell process "Terminal"
-                    keystroke "$escaped_message"
-                    keystroke return
-                end tell
+                keystroke "v" using command down
+                delay 0.3
+                key code 36  -- Return key
             end tell
             return "sent"
         end if
@@ -124,6 +131,14 @@ tell application "Terminal"
 end tell
 return "not_found"
 EOF
+        local result=$?
+        
+        # Restore old clipboard
+        if [[ -n "$old_clipboard" ]]; then
+            echo -n "$old_clipboard" | pbcopy
+        fi
+        
+        return $result
     fi
 }
 
