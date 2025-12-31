@@ -128,7 +128,33 @@ The bridge uses AppleScript to inject keystrokes. Grant Accessibility permission
 
 Copy `skill.md` to `~/.factory/skills/discord-notify/skill.md`
 
-### Step 6: Start the Bridge
+### Step 6: Install Shell Helpers
+
+Add to your `~/.zshrc`:
+
+```bash
+# Discord-Droid bridge helpers
+export PATH="$HOME/path/to/discord-droid-bridge:$PATH"
+
+# For Terminal.app
+droid-title() { echo -ne "\033]0;droid-$1\007"; }
+
+# For iTerm2 (requires shell integration)
+test -e "${HOME}/.iterm2_shell_integration.zsh" && source "${HOME}/.iterm2_shell_integration.zsh"
+
+droid-thread() {
+  export DROID_THREAD_ID="$1"
+  printf '\033]1337;SetUserVar=droid_thread=%s\007' $(echo -n "$1" | base64)
+  printf '\033]1;droid-%s\007' "$1"
+}
+```
+
+For iTerm2, also install shell integration:
+```bash
+curl -L https://iterm2.com/shell_integration/zsh -o ~/.iterm2_shell_integration.zsh
+```
+
+### Step 7: Start the Bridge
 
 ```bash
 # In a separate terminal (or run in background)
@@ -147,13 +173,12 @@ nohup ~/discord-droid-bridge/bridge.sh > ~/.factory/bridge.log 2>&1 &
 discord_create_thread(channelId: "YOUR_CHANNEL_ID", name: "[project:branch] - 2025-01-01")
 discord_watch_thread(threadId: "RETURNED_THREAD_ID")
 
-# 2. Set your terminal title to include the threadId for session routing
-# In Terminal.app or iTerm2:
-echo -ne "\033]0;droid-THREAD_ID\007"
+# 2. Set your terminal/session title for routing (after adding helpers to ~/.zshrc)
+# For iTerm2 (uses shell integration, sets session name):
+droid-thread THREAD_ID
 
-# Or use this shell function (add to ~/.zshrc):
-droid-title() { echo -ne "\033]0;droid-$1\007"; }
-# Then: droid-title THREAD_ID
+# For Terminal.app (uses escape codes, sets window title):
+droid-title THREAD_ID
 
 # 3. Send a message
 discord_send_thread_message(threadId: "THREAD_ID", message: "Hello from Droid!")

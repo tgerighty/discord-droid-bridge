@@ -58,10 +58,23 @@ find_droid_window() {
         return 0
     fi
     
-    # Try iTerm2 - strict match on threadId only
-    ITERM_WINDOWS=$(osascript -e 'tell application "iTerm" to get name of every window' 2>/dev/null)
+    # Try iTerm2 - check session names (more reliable than window names)
+    ITERM_SESSIONS=$(osascript <<'APPLESCRIPT'
+tell application "iTerm"
+    set allNames to {}
+    repeat with w in windows
+        repeat with t in tabs of w
+            repeat with s in sessions of t
+                set end of allNames to name of s
+            end repeat
+        end repeat
+    end repeat
+    return allNames
+end tell
+APPLESCRIPT
+    2>/dev/null)
     
-    if echo "$ITERM_WINDOWS" | grep -q "$thread_id"; then
+    if echo "$ITERM_SESSIONS" | grep -q "$thread_id"; then
         echo "iTerm:$thread_id"
         return 0
     fi
