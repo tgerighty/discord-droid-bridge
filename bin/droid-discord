@@ -46,6 +46,10 @@ cmd_register() {
     fi
     
     register_session "$thread_id" "$thread_name"
+    
+    # Save current session for cleanup on exit
+    echo "$thread_id" > "$HOME/.factory/current-discord-session"
+    
     echo ""
     echo "Export thread ID: export DROID_THREAD_ID=$thread_id"
 }
