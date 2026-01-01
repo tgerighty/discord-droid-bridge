@@ -15,7 +15,10 @@ description: Send important messages to Discord when you need user input or have
 
 **If a message came from Discord (injected by bridge), ALWAYS reply to Discord, not just the CLI.**
 
-The bridge prefixes Discord messages with `[Discord]` - when you see this, your response MUST go to the Discord thread.
+The bridge prefixes Discord messages with `[Discord:<threadId>]` - when you see this prefix, your response MUST go to that Discord thread using:
+```
+discord_send_thread_message(threadId: "<threadId from prefix>", message: "<your full response>")
+```
 
 **Thread Ownership:** Each session has its own threadId. Only check/respond to YOUR session's thread by filtering with the threadId you created.
 
@@ -43,12 +46,12 @@ Do NOT send Discord messages for:
 
 Each Droid session should use its own thread to keep conversations organized.
 
-### Starting a Session Thread
+### Starting a Session Thread (V2 - iTerm2 Only)
 
-At the start of a session (or first time you need Discord), create and watch a thread:
+At the start of a session (or first time you need Discord), create, watch, and **self-register**:
 
 ```
-// 1. Create the thread
+// 1. Create the thread (name format: [project:branch] - date time)
 discord_create_thread(
   channelId: "YOUR_CHANNEL_ID",
   name: "[project-name:branch] - YYYY-MM-DD HH:MM",
@@ -57,9 +60,54 @@ discord_create_thread(
 
 // 2. Watch it for incoming messages (use the returned threadId)
 discord_watch_thread(threadId: "<returned-thread-id>")
+
+// 3. IMPORTANT: Self-register by injecting to the current TTY
+// Get the TTY from the DROID_TTY environment variable (set by shell integration)
+// Then inject the registration command:
 ```
 
+**Self-Registration (REQUIRED):**
+
+After creating/watching the thread, you MUST IMMEDIATELY execute this SINGLE command block (replace `THREAD_ID` and `THREAD_NAME` with actual values):
+
+```bash
+# ALL-IN-ONE: Check iTerm2, register session, start bridge
+THREAD_ID="<your-thread-id>" && \
+THREAD_NAME="[project:branch]" && \
+if ! pgrep -f "iTerm" > /dev/null; then echo "ERROR: iTerm2 not running"; exit 1; fi && \
+TTY="${DROID_TTY:-$(ps -p $PPID -o tty= | sed 's/^/\/dev\//' | tr -d ' ')}" && \
+PID=$PPID && \
+jq --arg tid "$THREAD_ID" --arg tty "$TTY" --argjson pid "$PID" --arg name "$THREAD_NAME" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+   '.sessions[$tid] = {threadId: $tid, threadName: $name, tty: $tty, pid: $pid, registered: $now, lastActivity: $now}' \
+   ~/.factory/droid-sessions.json > /tmp/sess.$$.json && mv /tmp/sess.$$.json ~/.factory/droid-sessions.json && \
+echo "Registered: $THREAD_ID -> $TTY (PID $PID)" && \
+if ! pgrep -f "bridge-v2.sh" > /dev/null; then ~/discord-droid-bridge/bin/droid-discord start-bg; else echo "Bridge already running"; fi
+```
+
+**CRITICAL:** 
+- Execute this command IMMEDIATELY after `discord_watch_thread`. Do NOT skip this step.
+- Replace `THREAD_ID` with the threadId returned from `discord_create_thread`.
+- Replace `THREAD_NAME` with the thread name you used.
+- If this fails, Discord messages will NOT reach this session.
+
 Store the returned `threadId` for all subsequent messages in this session.
+
+**V2 Benefits:**
+- Messages inject directly into iTerm2 without stealing focus
+- TTY-based routing is more reliable than window title matching
+- Auto-deregister when terminal closes
+- Branch change detection prompts to rename thread
+
+### Branch Changes
+
+When the user changes git branches, the shell hook will prompt them:
+```
+[droid] Branch changed: main -> feature/new-feature
+To rename Discord thread, run in Droid:
+  discord_rename_thread(threadId: "...", newName: "[project:feature/new-feature] - ...")
+```
+
+You can then call `discord_rename_thread` to update the thread name.
 
 ### Sending Messages
 
@@ -114,7 +162,13 @@ Keep Discord messages concise and actionable:
 - **Create thread:** `discord_create_thread`
 - **Watch thread:** `discord_watch_thread` (enables auto-inbox)
 - **Send to thread:** `discord_send_thread_message`
+- **Rename thread:** `discord_rename_thread` (for branch changes)
 - **Get unread:** `discord_get_unread_messages` (from watched threads)
 - **Read all:** `discord_read_thread_messages`
 - **Clear inbox:** `discord_clear_inbox`
 - **Stop watching:** `discord_unwatch_thread`
+
+**Terminal commands (user runs these):**
+- `droid-register <threadId>` - Register session for message injection
+- `droid-status` - Show current session status
+- `droid-discord start-bg` - Start bridge daemon in background
