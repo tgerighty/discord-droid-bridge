@@ -9,40 +9,30 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Source library files
 source "$SCRIPT_DIR/lib/config.sh"
 source "$SCRIPT_DIR/lib/registry.sh"
-source "$SCRIPT_DIR/lib/queue.sh"
 
 usage() {
     cat <<EOF
-Discord-Droid Bridge CLI
+Discord-Droid Bridge CLI (V2 - iTerm2 only)
 
 Usage: droid-discord <command> [args]
 
 Session Commands:
   register <threadId> [name]  Register current session with Discord thread
-  deregister [threadId]       Deregister session (uses DROID_THREAD_ID if omitted)
+  deregister [threadId]       Deregister session
   status                      Show current session status
   list                        List all registered sessions
-
-Maintenance Commands:
-  cleanup                     Remove sessions with dead PIDs
-  queue                       Show message queue status
-  clear-dead-letter           Clear the dead letter queue
 
 Bridge Commands:
   start                       Start the bridge daemon (foreground)
   start-bg                    Start the bridge daemon (background)
   stop                        Stop the bridge daemon
   logs                        Show bridge logs
+  cleanup                     Remove sessions with dead PIDs
 
 Examples:
-  # After creating a Discord thread in Droid, register this terminal:
-  droid-discord register <threadId> "[project:main]"
-  
-  # Check current session:
-  droid-discord status
-  
-  # Start bridge in background:
+  droid-discord register 1234567890123456789 "[myproject:main]"
   droid-discord start-bg
+  droid-discord status
 EOF
 }
 
@@ -52,20 +42,12 @@ cmd_register() {
     
     if [[ -z "$thread_id" ]]; then
         echo "Usage: droid-discord register <threadId> [name]"
-        echo ""
-        echo "The threadId is returned when you create a thread in Droid:"
-        echo "  discord_create_thread(...)"
         exit 1
     fi
     
     register_session "$thread_id" "$thread_name"
-    
     echo ""
-    echo "Now run this to export the thread ID to your shell:"
-    echo "  export DROID_THREAD_ID=$thread_id"
-    echo ""
-    echo "Or add to your session setup:"
-    echo "  droid-register $thread_id \"$thread_name\""
+    echo "Export thread ID: export DROID_THREAD_ID=$thread_id"
 }
 
 cmd_deregister() {
@@ -73,7 +55,6 @@ cmd_deregister() {
     
     if [[ -z "$thread_id" ]]; then
         echo "No thread ID provided and DROID_THREAD_ID not set"
-        echo "Usage: droid-discord deregister <threadId>"
         exit 1
     fi
     
@@ -92,24 +73,6 @@ cmd_cleanup() {
     cleanup_dead_sessions
 }
 
-cmd_queue() {
-    init_queue
-    echo "Queue Status:"
-    get_queue_stats | jq .
-    
-    local queued=$(jq '.queued | length' "$QUEUE_FILE" 2>/dev/null || echo 0)
-    if [[ "$queued" -gt 0 ]]; then
-        echo ""
-        echo "Queued messages:"
-        jq -r '.queued[] | "  \(.id): thread=\(.threadId) attempts=\(.attempts) reason=\(.reason)"' "$QUEUE_FILE"
-    fi
-}
-
-cmd_clear_dead_letter() {
-    clear_dead_letter
-    echo "Dead letter queue cleared"
-}
-
 cmd_start() {
     exec "$SCRIPT_DIR/bridge-v2.sh"
 }
@@ -120,24 +83,19 @@ cmd_start_bg() {
         exit 1
     fi
     
-    nohup "$SCRIPT_DIR/bridge-v2.sh" > "$LOG_FILE" 2>&1 &
-    local pid=$!
-    echo "Bridge started in background (PID: $pid)"
+    nohup "$SCRIPT_DIR/bridge-v2.sh" >> "$LOG_FILE" 2>&1 &
+    echo "Bridge started (PID: $!)"
     echo "Logs: $LOG_FILE"
-    echo ""
-    echo "To stop: droid-discord stop"
 }
 
 cmd_stop() {
-    local pids=$(pgrep -f "bridge-v2.sh")
-    
-    if [[ -z "$pids" ]]; then
+    if ! pgrep -f "bridge-v2.sh" > /dev/null; then
         echo "Bridge is not running"
         exit 0
     fi
     
-    echo "Stopping bridge..."
     pkill -f "bridge-v2.sh"
+    pkill -f "fswatch.*discord-inbox"
     echo "Bridge stopped"
 }
 
@@ -145,54 +103,20 @@ cmd_logs() {
     if [[ -f "$LOG_FILE" ]]; then
         tail -50 "$LOG_FILE"
     else
-        echo "No log file found at $LOG_FILE"
+        echo "No log file at $LOG_FILE"
     fi
 }
 
-# Parse command
 case "${1:-}" in
-    register)
-        shift
-        cmd_register "$@"
-        ;;
-    deregister)
-        shift
-        cmd_deregister "$@"
-        ;;
-    status)
-        cmd_status
-        ;;
-    list)
-        cmd_list
-        ;;
-    cleanup)
-        cmd_cleanup
-        ;;
-    queue)
-        cmd_queue
-        ;;
-    clear-dead-letter)
-        cmd_clear_dead_letter
-        ;;
-    start)
-        cmd_start
-        ;;
-    start-bg)
-        cmd_start_bg
-        ;;
-    stop)
-        cmd_stop
-        ;;
-    logs)
-        cmd_logs
-        ;;
-    -h|--help|help|"")
-        usage
-        ;;
-    *)
-        echo "Unknown command: $1"
-        echo ""
-        usage
-        exit 1
-        ;;
+    register)    shift; cmd_register "$@" ;;
+    deregister)  shift; cmd_deregister "$@" ;;
+    status)      cmd_status ;;
+    list)        cmd_list ;;
+    cleanup)     cmd_cleanup ;;
+    start)       cmd_start ;;
+    start-bg)    cmd_start_bg ;;
+    stop)        cmd_stop ;;
+    logs)        cmd_logs ;;
+    -h|--help|help|"") usage ;;
+    *)           echo "Unknown: $1"; usage; exit 1 ;;
 esac

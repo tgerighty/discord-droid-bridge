@@ -2,6 +2,31 @@
 # Discord-Droid Bridge V2 - iTerm2 Injection
 # Direct session write without focus stealing
 
+# Validate TTY format (security: prevent injection via malformed TTY)
+# Usage: validate_tty <tty>
+# Returns: 0 if valid, 1 if invalid
+validate_tty() {
+    local tty="$1"
+    # TTY must match /dev/ttysNNN pattern exactly
+    [[ "$tty" =~ ^/dev/ttys[0-9]+$ ]]
+}
+
+# Validate and sanitize message for AppleScript injection
+# Usage: sanitize_message <message>
+# Returns: sanitized message or exits with error
+sanitize_message() {
+    local msg="$1"
+    
+    # Reject messages with control characters (except newline which we'll handle)
+    if [[ "$msg" =~ [[:cntrl:]] && ! "$msg" =~ $'\n' ]]; then
+        echo "error:message contains control characters"
+        return 1
+    fi
+    
+    # Escape for AppleScript: backslashes, quotes, and convert newlines to spaces
+    printf '%s' "$msg" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\n' ' '
+}
+
 # Inject message to iTerm session by TTY
 # Usage: inject_to_iterm <tty> <message>
 # Returns: "sent", "not_found", or "error:<message>"
@@ -9,8 +34,19 @@ inject_to_iterm() {
     local tty="$1"
     local message="$2"
     
-    # Escape special characters for AppleScript
-    local escaped_message=$(printf '%s' "$message" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    # Validate TTY format (security)
+    if ! validate_tty "$tty"; then
+        echo "error:invalid tty format"
+        return 1
+    fi
+    
+    # Sanitize message for AppleScript (security)
+    local escaped_message
+    escaped_message=$(sanitize_message "$message")
+    if [[ $? -ne 0 ]]; then
+        echo "$escaped_message"
+        return 1
+    fi
     
     local result
     result=$(osascript <<EOF
@@ -45,34 +81,5 @@ EOF
 # Usage: is_iterm_running
 # Returns: 0 if running, 1 if not
 is_iterm_running() {
-    pgrep -x "iTerm2" > /dev/null 2>&1
-}
-
-# Get all iTerm session TTYs
-# Usage: get_iterm_ttys
-# Returns: List of TTYs, one per line
-get_iterm_ttys() {
-    osascript <<'EOF' 2>/dev/null
-tell application "iTerm"
-    set ttyList to {}
-    repeat with w in windows
-        repeat with t in tabs of w
-            repeat with s in sessions of t
-                set end of ttyList to tty of s
-            end repeat
-        end repeat
-    end repeat
-    return ttyList
-end tell
-EOF
-}
-
-# Verify a TTY exists in iTerm
-# Usage: verify_iterm_tty <tty>
-# Returns: 0 if found, 1 if not
-verify_iterm_tty() {
-    local tty="$1"
-    local ttys=$(get_iterm_ttys)
-    
-    echo "$ttys" | grep -q "$tty"
+    pgrep -f "iTerm" > /dev/null 2>&1
 }

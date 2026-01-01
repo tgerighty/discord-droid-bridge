@@ -78,7 +78,7 @@ if ! pgrep -f "iTerm" > /dev/null; then echo "ERROR: iTerm2 not running"; exit 1
 TTY="${DROID_TTY:-$(ps -p $PPID -o tty= | sed 's/^/\/dev\//' | tr -d ' ')}" && \
 PID=$PPID && \
 jq --arg tid "$THREAD_ID" --arg tty "$TTY" --argjson pid "$PID" --arg name "$THREAD_NAME" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-   '.sessions[$tid] = {threadId: $tid, threadName: $name, tty: $tty, pid: $pid, registered: $now, lastActivity: $now}' \
+   '.sessions[$tid] = {tty: $tty, pid: $pid, name: $name, registered: $now}' \
    ~/.factory/droid-sessions.json > /tmp/sess.$$.json && mv /tmp/sess.$$.json ~/.factory/droid-sessions.json && \
 echo "Registered: $THREAD_ID -> $TTY (PID $PID)" && \
 if ! pgrep -f "bridge-v2.sh" > /dev/null; then droid-discord start-bg; else echo "Bridge already running"; fi
