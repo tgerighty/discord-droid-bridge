@@ -48,7 +48,18 @@ Each Droid session should use its own thread to keep conversations organized.
 
 ### Starting a Session Thread (V2 - iTerm2 Only)
 
-At the start of a session (or first time you need Discord), create, watch, and **self-register**:
+**Automatic Registration via Hooks:**
+
+If `DROID_THREAD_ID` is set in the environment BEFORE starting Droid, the session hook will automatically register/deregister the session. The user can set this in their shell:
+
+```bash
+export DROID_THREAD_ID="<thread-id>"
+droid  # Session auto-registers on start, auto-deregisters on end
+```
+
+**Manual Thread Creation:**
+
+If starting fresh (no existing thread), create and watch one:
 
 ```
 // 1. Create the thread (name format: [project:branch] - date time)
@@ -61,34 +72,19 @@ discord_create_thread(
 // 2. Watch it for incoming messages (use the returned threadId)
 discord_watch_thread(threadId: "<returned-thread-id>")
 
-// 3. IMPORTANT: Self-register by injecting to the current TTY
-// Get the TTY from the DROID_TTY environment variable (set by shell integration)
-// Then inject the registration command:
+// 3. Register the session (bridge will route messages to this terminal)
 ```
 
-**Self-Registration (REQUIRED):**
+**Self-Registration (if not using hooks):**
 
-After creating/watching the thread, you MUST IMMEDIATELY execute this SINGLE command block (replace `THREAD_ID` and `THREAD_NAME` with actual values):
+After creating/watching the thread, register by executing:
 
 ```bash
-# ALL-IN-ONE: Check iTerm2, register session, start bridge
+# Register session and ensure bridge is running
 THREAD_ID="<your-thread-id>" && \
-THREAD_NAME="[project:branch]" && \
-if ! pgrep -f "iTerm" > /dev/null; then echo "ERROR: iTerm2 not running"; exit 1; fi && \
-TTY="${DROID_TTY:-$(ps -p $PPID -o tty= | sed 's/^/\/dev\//' | tr -d ' ')}" && \
-PID=$PPID && \
-jq --arg tid "$THREAD_ID" --arg tty "$TTY" --argjson pid "$PID" --arg name "$THREAD_NAME" --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-   '.sessions[$tid] = {tty: $tty, pid: $pid, name: $name, registered: $now}' \
-   ~/.factory/droid-sessions.json > /tmp/sess.$$.json && mv /tmp/sess.$$.json ~/.factory/droid-sessions.json && \
-echo "Registered: $THREAD_ID -> $TTY (PID $PID)" && \
-if ! pgrep -f "bridge-v2.sh" > /dev/null; then droid-discord start-bg; else echo "Bridge already running"; fi
+droid-discord register "$THREAD_ID" "[project:branch]" && \
+droid-discord start-bg 2>/dev/null || echo "Bridge already running"
 ```
-
-**CRITICAL:** 
-- Execute this command IMMEDIATELY after `discord_watch_thread`. Do NOT skip this step.
-- Replace `THREAD_ID` with the threadId returned from `discord_create_thread`.
-- Replace `THREAD_NAME` with the thread name you used.
-- If this fails, Discord messages will NOT reach this session.
 
 Store the returned `threadId` for all subsequent messages in this session.
 
