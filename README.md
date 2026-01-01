@@ -1,254 +1,173 @@
 # Discord-Droid Bridge
 
-A complete solution for two-way communication between Discord and the Droid CLI (Factory.ai). Send messages from Discord and have them injected directly into your active Droid session, with responses sent back to Discord.
+**Two-way communication between Discord and the Droid CLI (Factory.ai)**
 
-## Architecture
+> ⚠️ **Requirements:** macOS + iTerm2 + Discord
+
+Send messages from Discord threads directly into your Droid CLI session, and have Droid respond back to Discord automatically.
+
+## How It Works
 
 ```
-┌─────────────┐     ┌──────────────────┐     ┌─────────────────┐     ┌──────────────┐
-│   Discord   │────▶│   mcp-discord    │────▶│  bridge.sh      │────▶│  Droid CLI   │
-│   Thread    │     │   (MCP Server)   │     │  (Background)   │     │  (Terminal)  │
-└─────────────┘     └──────────────────┘     └─────────────────┘     └──────────────┘
-       ▲                    │                                               │
-       │                    ▼                                               │
-       │            ~/.factory/discord-inbox.json                           │
-       │                                                                    │
-       └────────────────────────────────────────────────────────────────────┘
-                              (Droid responds via discord_send_thread_message)
+Discord Thread → mcp-discord (MCP) → discord-inbox.json
+                                            ↓ fswatch (instant)
+Session Registry → bridge-v2.sh → iTerm2 (direct TTY write, no focus steal)
+                                            ↓
+                                    Droid responds via discord_send_thread_message
 ```
 
-## Components
-
-### 1. mcp-discord (MCP Server)
-Located at: `~/mcp-discord`
-
-An extended version of [slimslenderslacks/mcp-discord](https://github.com/slimslenderslacks/mcp-discord) with added features:
-- Thread creation and management
-- Thread watching with auto-inbox
-- File-based message notifications
-
-**Key tools added:**
-- `discord_create_thread` - Create a thread in a text channel
-- `discord_watch_thread` - Start watching a thread for incoming messages
-- `discord_unwatch_thread` - Stop watching a thread
-- `discord_get_unread_messages` - Get unread messages from watched threads
-- `discord_send_thread_message` - Send a message to a thread
-- `discord_read_thread_messages` - Read messages from a thread
-- `discord_clear_inbox` - Clear the message inbox
-
-### 2. bridge.sh (This Repo)
-A background script that:
-- Monitors `~/.factory/discord-inbox.json` for new messages
-- Routes messages to the **specific terminal session** that owns the thread (by threadId in window title)
-- Supports multiple concurrent Droid sessions with session isolation
-- Injects Discord messages via clipboard paste (Terminal.app) or direct write (iTerm2)
-- Tracks processed messages to avoid duplicates
-
-### 3. discord-notify Skill
-Located at: `~/.factory/skills/discord-notify/skill.md`
-
-A Droid skill that instructs the AI to:
-- Always respond to Discord messages via the thread
-- Send full responses (not summaries) to Discord
-- Check for unread messages periodically
+**Key Features:**
+- **Instant delivery** - fswatch detects messages immediately (no polling)
+- **No focus stealing** - Messages inject directly via iTerm2's `write text` API
+- **Multi-session support** - Each Droid session gets its own Discord thread
+- **Auto-registration** - Skill handles session setup automatically
 
 ## Prerequisites
 
-- macOS (uses AppleScript for terminal automation)
-- [Droid CLI](https://factory.ai) installed
-- `jq` installed (`brew install jq`)
-- Discord bot with:
-  - Message Content Intent enabled
-  - Server Members Intent enabled
-  - Presence Intent enabled
-  - Bot added to your server with appropriate permissions
+- **macOS** (uses AppleScript for iTerm2 automation)
+- **iTerm2** (Terminal.app not supported in V2)
+- **[Droid CLI](https://factory.ai)** installed
+- **jq** (`brew install jq`)
+- **fswatch** (`brew install fswatch`)
+- **Discord bot** with Message Content Intent enabled
 
-## Setup
+## Quick Start
 
-### Step 1: Create Discord Bot
+### 1. Create Discord Bot
 
 1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
-2. Create a new application → Add Bot
-3. Enable Privileged Gateway Intents:
-   - Message Content Intent ✓
-   - Server Members Intent ✓
-   - Presence Intent ✓
-4. Generate OAuth2 URL with `bot` scope and permissions:
-   - Send Messages
-   - Read Message History
-   - Add Reactions
-   - Manage Channels
-   - Manage Threads
-   - Create Public Threads
-   - Send Messages in Threads
-5. Invite bot to your server using the generated URL
+2. Create application → Add Bot
+3. Enable **Message Content Intent** under Privileged Gateway Intents
+4. Generate OAuth2 URL with `bot` scope and these permissions:
+   - Send Messages, Read Message History, Manage Threads, Create Public Threads, Send Messages in Threads
+5. Invite bot to your server
 6. Copy the bot token
 
-### Step 2: Install mcp-discord
+### 2. Install mcp-discord
 
-```bash
-git clone https://github.com/slimslenderslacks/mcp-discord.git ~/mcp-discord
-cd ~/mcp-discord
-npm install
-npm run build
-```
-
-Apply the custom patches (thread support, watch/inbox, file writing) - see `mcp-discord-patches/` directory.
-
-### Step 3: Configure MCP in Droid
+You need an MCP server for Discord. Use [mcp-discord](https://github.com/slimslenderslacks/mcp-discord) with thread/watch extensions, or any compatible Discord MCP.
 
 Add to `~/.factory/mcp.json`:
-
 ```json
 {
   "mcpServers": {
     "discord": {
       "type": "stdio",
-      "command": "node",
-      "args": [
-        "/Users/YOUR_USERNAME/path/to/mcp-discord/build/index.js"
-      ],
+      "command": "npx",
+      "args": ["@anthropic/mcp-discord"],
       "env": {
-        "DISCORD_TOKEN": "YOUR_DISCORD_BOT_TOKEN"
+        "DISCORD_TOKEN": "your-bot-token-here"
       }
     }
   }
 }
 ```
 
-### Step 4: Grant macOS Permissions
-
-The bridge uses AppleScript to inject keystrokes. Grant Accessibility permissions:
-
-1. Open System Settings → Privacy & Security → Accessibility
-2. Add `/usr/bin/osascript`
-3. Add Terminal.app (or iTerm2)
-
-### Step 5: Install the Skill
-
-Copy `skill.md` to `~/.factory/skills/discord-notify/skill.md`
-
-### Step 6: Install Shell Helpers
-
-Add to your `~/.zshrc`:
+### 3. Install Bridge
 
 ```bash
-# Discord-Droid bridge helpers
-export PATH="$HOME/path/to/discord-droid-bridge:$PATH"
+git clone https://github.com/YOUR_USERNAME/discord-droid-bridge.git
+cd discord-droid-bridge
 
-# For Terminal.app
-droid-title() { echo -ne "\033]0;droid-$1\007"; }
+# Add to PATH (add to ~/.zshrc)
+export PATH="$HOME/path/to/discord-droid-bridge/bin:$PATH"
 
-# For iTerm2 (requires shell integration)
-test -e "${HOME}/.iterm2_shell_integration.zsh" && source "${HOME}/.iterm2_shell_integration.zsh"
-
-droid-thread() {
-  export DROID_THREAD_ID="$1"
-  printf '\033]1337;SetUserVar=droid_thread=%s\007' $(echo -n "$1" | base64)
-  printf '\033]1;droid-%s\007' "$1"
-}
+# Export TTY for Droid (add to ~/.zshrc)
+export DROID_TTY=$(tty 2>/dev/null || echo "")
 ```
 
-For iTerm2, also install shell integration:
-```bash
-curl -L https://iterm2.com/shell_integration/zsh -o ~/.iterm2_shell_integration.zsh
-```
-
-### Step 7: Start the Bridge
+### 4. Install Skill
 
 ```bash
-# In a separate terminal (or run in background)
-~/discord-droid-bridge/bridge.sh
-
-# Or run in background
-nohup ~/discord-droid-bridge/bridge.sh > ~/.factory/bridge.log 2>&1 &
+cp skill/discord-notify.md ~/.factory/skills/discord-notify.md
 ```
+
+### 5. Grant Permissions
+
+System Settings → Privacy & Security → Accessibility:
+- Add iTerm2
+- Add `/usr/bin/osascript`
 
 ## Usage
 
-### In Droid Session
+### In Droid
 
-```bash
-# 1. Create and watch a thread
-discord_create_thread(channelId: "YOUR_CHANNEL_ID", name: "[project:branch] - 2025-01-01")
-discord_watch_thread(threadId: "RETURNED_THREAD_ID")
-
-# 2. Set your terminal/session title for routing (after adding helpers to ~/.zshrc)
-# For iTerm2 (uses shell integration, sets session name):
-droid-thread THREAD_ID
-
-# For Terminal.app (uses escape codes, sets window title):
-droid-title THREAD_ID
-
-# 3. Send a message
-discord_send_thread_message(threadId: "THREAD_ID", message: "Hello from Droid!")
-
-# 4. Check for messages
-discord_get_unread_messages()
+Just invoke the skill:
 ```
+Use the discord-notify skill to set up Discord for this session
+```
+
+The skill will:
+1. Create a Discord thread
+2. Watch it for incoming messages
+3. Register the session (TTY + PID)
+4. Start the bridge if not running
 
 ### From Discord
 
-Simply send a message in the watched thread. The bridge will:
-1. Detect the new message in `~/.factory/discord-inbox.json`
-2. Find the terminal window with the matching **threadId** in its title
-3. Inject the message into **only that session**
-4. Droid processes and responds back to Discord
+Send a message in the thread. It appears in Droid instantly, and Droid responds back to Discord.
 
-### Multi-Session Support
+## Components
 
-Each Droid session can have its own Discord thread. Messages are isolated by threadId:
+| Component | Purpose |
+|-----------|---------|
+| `bridge-v2.sh` | Main daemon - watches inbox, injects to iTerm2 |
+| `bin/droid-discord` | CLI tool for session management |
+| `lib/config.sh` | Paths and logging |
+| `lib/registry.sh` | Session registration (TTY + PID tracking) |
+| `lib/inject.sh` | iTerm2 AppleScript injection |
+| `lib/queue.sh` | Retry queue for failed deliveries |
+| `skill/discord-notify.md` | Droid skill for auto-setup |
 
+## CLI Commands
+
+```bash
+droid-discord register <threadId> [name]  # Register session
+droid-discord deregister [threadId]       # Deregister session
+droid-discord status                      # Show current session
+droid-discord list                        # List all sessions
+droid-discord start                       # Start bridge (foreground)
+droid-discord start-bg                    # Start bridge (background)
+droid-discord stop                        # Stop bridge
+droid-discord logs                        # Show bridge logs
 ```
-Terminal 1: title="droid-1234567890"  ←── receives messages from thread 1234567890
-Terminal 2: title="droid-0987654321"  ←── receives messages from thread 0987654321
-```
-
-If no terminal has a matching threadId in its title, the message is logged but not injected.
 
 ## Files
 
 | File | Location | Purpose |
 |------|----------|---------|
-| `bridge.sh` | This repo | Main bridge script |
-| `mcp-discord/` | `~/mcp-discord` | Extended MCP server |
-| `discord-notify/skill.md` | `~/.factory/skills/discord-notify/` | Droid skill |
-| `discord-inbox.json` | `~/.factory/` | Incoming message queue |
-| `discord-inbox-processed.txt` | `~/.factory/` | Processed message IDs |
-| `bridge.log` | `~/.factory/` | Bridge logs (when run in background) |
-| `mcp.json` | `~/.factory/` | MCP server configuration |
-
-## Configuration
-
-Environment variables for `bridge.sh`:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CHECK_INTERVAL` | `5` | Seconds between inbox checks |
+| `droid-sessions.json` | `~/.factory/` | Session registry |
+| `discord-inbox.json` | `~/.factory/` | Incoming messages (from mcp-discord) |
+| `discord-queue.json` | `~/.factory/` | Retry queue |
+| `bridge-v2.log` | `~/.factory/` | Bridge logs |
 
 ## Troubleshooting
 
-### Bridge not injecting messages
+### Messages not reaching Droid
 
-1. Check Accessibility permissions for `osascript`
-2. Ensure Droid window title contains "droid"
-3. Check `~/.factory/bridge.log` for errors
+1. Check session is registered: `droid-discord list`
+2. Check bridge is running: `pgrep -f bridge-v2.sh`
+3. Check logs: `droid-discord logs`
 
-### Messages not appearing in inbox
+### "No session for thread" in logs
 
-1. Verify thread is being watched: `discord_get_unread_messages()` should show `watchedThreads`
-2. Check mcp-discord is running (restart Droid)
-3. Verify `~/.factory/discord-inbox.json` is being updated
+The session wasn't registered. Run the skill's registration command or manually:
+```bash
+droid-discord register <threadId> "[project:branch]"
+```
 
-### "osascript is not allowed to send keystrokes"
+### Permission errors
 
-Grant Accessibility permission to `/usr/bin/osascript` in System Settings.
+Grant Accessibility permissions to iTerm2 and `/usr/bin/osascript` in System Settings.
 
-## Security Notes
+## How Sessions Work
 
-- The Discord bot token is stored in `~/.factory/mcp.json` - keep this file secure
-- The bridge has access to your terminal - only run in trusted environments
-- Messages are stored temporarily in `~/.factory/discord-inbox.json`
+Each Droid session registers with:
+- **threadId** - Discord thread for this session
+- **tty** - Terminal device (e.g., `/dev/ttys005`)
+- **pid** - Process ID (for liveness checks)
+
+Messages are routed by threadId → TTY lookup. Dead sessions (PID gone) are cleaned up automatically.
 
 ## License
 

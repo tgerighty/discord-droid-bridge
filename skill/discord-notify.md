@@ -81,7 +81,7 @@ jq --arg tid "$THREAD_ID" --arg tty "$TTY" --argjson pid "$PID" --arg name "$THR
    '.sessions[$tid] = {threadId: $tid, threadName: $name, tty: $tty, pid: $pid, registered: $now, lastActivity: $now}' \
    ~/.factory/droid-sessions.json > /tmp/sess.$$.json && mv /tmp/sess.$$.json ~/.factory/droid-sessions.json && \
 echo "Registered: $THREAD_ID -> $TTY (PID $PID)" && \
-if ! pgrep -f "bridge-v2.sh" > /dev/null; then ~/discord-droid-bridge/bin/droid-discord start-bg; else echo "Bridge already running"; fi
+if ! pgrep -f "bridge-v2.sh" > /dev/null; then droid-discord start-bg; else echo "Bridge already running"; fi
 ```
 
 **CRITICAL:** 
@@ -158,7 +158,7 @@ Keep Discord messages concise and actionable:
 
 ## Quick Reference
 
-- **Channel ID:** `YOUR_CHANNEL_ID`
+- **Channel ID:** Your Discord channel ID
 - **Create thread:** `discord_create_thread`
 - **Watch thread:** `discord_watch_thread` (enables auto-inbox)
 - **Send to thread:** `discord_send_thread_message`

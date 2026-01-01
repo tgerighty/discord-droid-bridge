@@ -35,7 +35,7 @@ Sessions self-register when starting Discord integration:
   "sessions": {
     "<threadId>": {
       "threadId": "<threadId>",
-      "threadName": "[home:discord-bridge] - 2025-12-31",
+      "threadName": "[project:branch] - 2025-12-31",
       "tty": "/dev/ttys003",
       "pid": 12345,
       "app": "iTerm",
@@ -218,7 +218,7 @@ droid-status() {
 ├── discord-queue.json        # Undelivered message queue
 └── bridge.log               # Bridge daemon logs
 
-~/discord-droid-bridge/
+discord-droid-bridge/
 ├── bridge-v2.sh             # Main daemon (fswatch-based)
 ├── lib/
 │   ├── registry.sh          # Session registry functions
