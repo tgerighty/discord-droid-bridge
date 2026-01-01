@@ -66,14 +66,4 @@ rotate_log_file() {
     fi
 }
 
-# File locking for safe concurrent access
-# Usage: with_lock <file> <command>
-with_lock() {
-    local file="$1"
-    local cmd="$2"
-    local lockfile="${file}.lock"
-    (
-        flock -x -w 5 200 || { error "Lock timeout: $lockfile"; return 1; }
-        eval "$cmd"
-    ) 200>"$lockfile"
-}
+

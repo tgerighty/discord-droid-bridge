@@ -21,7 +21,7 @@ init_registry() {
     fi
 }
 
-# Register a session with the current TTY (with file locking)
+# Register a session with the current TTY
 # Usage: register_session <threadId> [threadName]
 register_session() {
     local thread_id="$1"
@@ -30,7 +30,6 @@ register_session() {
     local pid=$$
     local now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     
-    # Validate thread ID
     if ! validate_thread_id "$thread_id"; then
         echo "Error: Invalid thread ID format"
         return 1
@@ -38,32 +37,27 @@ register_session() {
     
     init_registry
     
-    # Use file locking for safe concurrent access
-    with_lock "$SESSIONS_FILE" "
-        local tmp=\$(secure_temp)
-        jq --arg tid '$thread_id' \
-           --arg tty '$current_tty' \
-           --argjson pid $pid \
-           --arg name '$thread_name' \
-           --arg now '$now' \
-           '.sessions[\$tid] = {tty: \$tty, pid: \$pid, name: \$name, registered: \$now}' \
-           '$SESSIONS_FILE' > \"\$tmp\" && mv \"\$tmp\" '$SESSIONS_FILE'
-    "
+    local tmp=$(secure_temp)
+    jq --arg tid "$thread_id" \
+       --arg tty "$current_tty" \
+       --argjson pid $pid \
+       --arg name "$thread_name" \
+       --arg now "$now" \
+       '.sessions[$tid] = {tty: $tty, pid: $pid, name: $name, registered: $now}' \
+       "$SESSIONS_FILE" > "$tmp" && mv "$tmp" "$SESSIONS_FILE"
     
     echo "✓ Registered: thread=$thread_id tty=$current_tty pid=$pid"
 }
 
-# Deregister a session (with file locking)
+# Deregister a session
 # Usage: deregister_session <threadId>
 deregister_session() {
     local thread_id="$1"
     
     [[ ! -f "$SESSIONS_FILE" ]] && return 0
     
-    with_lock "$SESSIONS_FILE" "
-        local tmp=\$(secure_temp)
-        jq --arg tid '$thread_id' 'del(.sessions[\$tid])' '$SESSIONS_FILE' > \"\$tmp\" && mv \"\$tmp\" '$SESSIONS_FILE'
-    "
+    local tmp=$(secure_temp)
+    jq --arg tid "$thread_id" 'del(.sessions[$tid])' "$SESSIONS_FILE" > "$tmp" && mv "$tmp" "$SESSIONS_FILE"
     
     echo "✓ Deregistered: thread=$thread_id"
 }
