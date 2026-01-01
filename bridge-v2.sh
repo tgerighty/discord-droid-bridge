@@ -29,16 +29,23 @@ check_dependencies() {
     fi
 }
 
-# Process new messages from inbox (optimized: single jq parse per message)
+# Process new messages from inbox
 process_inbox() {
     [[ ! -f "$INBOX_FILE" ]] && return
     
     local unread=$(jq -r '.unreadCount // 0' "$INBOX_FILE" 2>/dev/null)
     [[ "$unread" -eq 0 || "$unread" == "null" ]] && return
     
-    # Single jq call extracts all needed fields as TSV
-    jq -r '.messages[]? | [.id, .threadId, .content, .author.username] | @tsv' "$INBOX_FILE" 2>/dev/null | \
-    while IFS=$'\t' read -r msg_id thread_id content author; do
+    # Process each message as compact JSON (safer than TSV for content with special chars)
+    jq -c '.messages[]?' "$INBOX_FILE" 2>/dev/null | while IFS= read -r msg; do
+        [[ -z "$msg" ]] && continue
+        
+        # Extract fields from JSON
+        local msg_id=$(echo "$msg" | jq -r '.id')
+        local thread_id=$(echo "$msg" | jq -r '.threadId')
+        local content=$(echo "$msg" | jq -r '.content')
+        local author=$(echo "$msg" | jq -r '.author.username')
+        
         [[ -z "$msg_id" ]] && continue
         
         # Skip if already processed
@@ -62,9 +69,9 @@ process_inbox() {
             continue
         fi
         
-        # Extract tty and pid in single jq call
-        local tty pid
-        read -r tty pid < <(echo "$session" | jq -r '[.tty, .pid] | @tsv')
+        # Extract tty and pid
+        local tty=$(echo "$session" | jq -r '.tty')
+        local pid=$(echo "$session" | jq -r '.pid')
         
         # Verify PID still alive
         if ! kill -0 "$pid" 2>/dev/null; then
