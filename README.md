@@ -13,7 +13,7 @@ Discord Thread → mcp-discord (MCP) → discord-inbox.json
                                             ↓ fswatch (instant)
 Session Registry → bridge-v2.sh → iTerm2 (direct TTY write, no focus steal)
                                             ↓
-                                    Droid responds via discord_send_thread_message
+                                Stop Hook → droid-discord send → Discord Thread
 ```
 
 **Key Features:**
@@ -63,7 +63,14 @@ Add to `~/.factory/mcp.json`:
 }
 ```
 
-### 3. Install Bridge
+### 3. Configure Discord IDs
+
+```bash
+cp discord-config.example.json ~/.factory/discord-config.json
+# Edit ~/.factory/discord-config.json with your guildId + channelId
+```
+
+### 4. Install Bridge
 
 ```bash
 git clone https://github.com/YOUR_USERNAME/discord-droid-bridge.git
@@ -73,16 +80,17 @@ cd discord-droid-bridge
 export PATH="$HOME/path/to/discord-droid-bridge/bin:$PATH"
 
 # Export TTY for Droid (add to ~/.zshrc)
+# This enables bridge auto-registration when a thread is created but not registered.
 export DROID_TTY=$(tty 2>/dev/null || echo "")
 ```
 
-### 4. Install Skill
+### 5. Install Skill
 
 ```bash
 cp skill/discord-notify.md ~/.factory/skills/discord-notify.md
 ```
 
-### 5. Grant Permissions
+### 6. Grant Permissions
 
 System Settings → Privacy & Security → Accessibility:
 - Add iTerm2
@@ -92,7 +100,7 @@ System Settings → Privacy & Security → Accessibility:
 
 ### In Droid
 
-Just invoke the skill:
+Use the skill once per session:
 ```
 Use the discord-notify skill to set up Discord for this session
 ```
@@ -105,7 +113,92 @@ The skill will:
 
 ### From Discord
 
-Send a message in the thread. It appears in Droid instantly, and Droid responds back to Discord.
+Send a message in the thread. It appears in Droid instantly, and Droid responds back to Discord via hooks (deterministic).
+
+## Hooks (Required for Full Two-Way Communication)
+
+Hooks make the bridge fully automatic - no need for the model to manually call MCP tools.
+
+### Install All Hooks
+
+```bash
+# Copy all hooks to Factory's hooks directory
+cp hooks/*.sh ~/.factory/hooks/
+chmod +x ~/.factory/hooks/*.sh
+```
+
+### Configure Hooks in Settings
+
+Add to `~/.factory/settings.json`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.factory/hooks/discord-session-start.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.factory/hooks/discord-prompt-submit.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.factory/hooks/discord-stop.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### What Each Hook Does
+
+| Hook | Purpose |
+|------|---------|
+| `discord-session-start.sh` | Starts heartbeat daemon when session begins |
+| `discord-prompt-submit.sh` | Sends "Got it!" acknowledgment, restarts heartbeat |
+| `discord-stop.sh` | Sends final response to Discord, stops heartbeat |
+| `discord-heartbeat.sh` | Background daemon that sends periodic "still working" messages |
+
+### Heartbeat Configuration
+
+The heartbeat sends a witty "still working" message every 60 seconds by default. Configure with:
+
+```bash
+export DISCORD_HEARTBEAT_INTERVAL=90  # seconds between messages
+```
+
+Example messages:
+- "Still crunching through your request... (~2m elapsed)"
+- "Working on it - haven't forgotten about you!"
+- "In the zone, be back soon..."
+
+### Manual Heartbeat Control
+
+```bash
+# Check heartbeat status
+~/.factory/hooks/discord-heartbeat.sh status
+
+# Stop heartbeat manually
+~/.factory/hooks/discord-heartbeat.sh stop
+```
 
 ## Components
 
@@ -113,11 +206,14 @@ Send a message in the thread. It appears in Droid instantly, and Droid responds 
 |-----------|---------|
 | `bridge-v2.sh` | Main daemon - watches inbox, injects to iTerm2 |
 | `bin/droid-discord` | CLI tool for session management |
-| `lib/config.sh` | Paths and logging |
+| `lib/config.sh` | Paths, logging, and locking utilities |
 | `lib/registry.sh` | Session registration (TTY + PID tracking) |
 | `lib/inject.sh` | iTerm2 AppleScript injection |
-| `lib/queue.sh` | Retry queue for failed deliveries |
 | `skill/discord-notify.md` | Droid skill for auto-setup |
+| `hooks/discord-heartbeat.sh` | Background heartbeat daemon |
+| `hooks/discord-session-start.sh` | SessionStart hook - starts heartbeat |
+| `hooks/discord-prompt-submit.sh` | UserPromptSubmit hook - acknowledgment + restart heartbeat |
+| `hooks/discord-stop.sh` | Stop hook - sends response, stops heartbeat |
 
 ## CLI Commands
 
@@ -130,6 +226,7 @@ droid-discord start                       # Start bridge (foreground)
 droid-discord start-bg                    # Start bridge (background)
 droid-discord stop                        # Stop bridge
 droid-discord logs                        # Show bridge logs
+droid-discord send <threadId> [message]   # Send message to Discord thread (stdin if omitted)
 ```
 
 ## Files

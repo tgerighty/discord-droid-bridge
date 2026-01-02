@@ -5,12 +5,27 @@
 # Uses fswatch for instant detection, direct TTY write for no focus steal
 #
 
+set -uo pipefail  # Note: -e omitted to allow graceful error handling in loops
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source library files
 source "$SCRIPT_DIR/lib/config.sh"
 source "$SCRIPT_DIR/lib/registry.sh"
 source "$SCRIPT_DIR/lib/inject.sh"
+
+# Associative array for O(1) processed message lookup
+declare -A PROCESSED_IDS
+
+# Load processed IDs into memory
+load_processed_ids() {
+    PROCESSED_IDS=()
+    if [[ -f "$PROCESSED_FILE" ]]; then
+        while IFS= read -r id; do
+            [[ -n "$id" ]] && PROCESSED_IDS["$id"]=1
+        done < "$PROCESSED_FILE"
+    fi
+}
 
 # Check dependencies
 check_dependencies() {
@@ -29,62 +44,79 @@ check_dependencies() {
     fi
 }
 
+# Check if session is alive (PID running or TTY has processes)
+is_session_alive() {
+    local pid="$1"
+    local tty="$2"
+    
+    # If PID is valid and running, session is alive
+    if [[ -n "$pid" && "$pid" != "null" && "$pid" =~ ^[0-9]+$ ]]; then
+        kill -0 "$pid" 2>/dev/null && return 0
+    fi
+    
+    # Otherwise check if TTY has any processes
+    tty_has_processes "$tty"
+}
+
 # Process new messages from inbox
 process_inbox() {
-    [[ ! -f "$INBOX_FILE" ]] && return
-    
-    local unread=$(jq -r '.unreadCount // 0' "$INBOX_FILE" 2>/dev/null)
-    [[ "$unread" -eq 0 || "$unread" == "null" ]] && return
-    
-    # Process each message as compact JSON (safer than TSV for content with special chars)
-    jq -c '.messages[]?' "$INBOX_FILE" 2>/dev/null | while IFS= read -r msg; do
-        [[ -z "$msg" ]] && continue
-        
-        # Extract fields from JSON
-        local msg_id=$(echo "$msg" | jq -r '.id')
-        local thread_id=$(echo "$msg" | jq -r '.threadId')
-        local content=$(echo "$msg" | jq -r '.content')
-        local author=$(echo "$msg" | jq -r '.author.username')
-        
+    [[ ! -f "$INBOX_FILE" ]] && return 0
+
+    # Reload processed IDs to catch any external changes
+    load_processed_ids
+
+    # Process each message - single jq call extracts all fields (performance optimization)
+    while IFS=$'\t' read -r msg_id thread_id author thread_name content; do
         [[ -z "$msg_id" ]] && continue
         
-        # Skip if already processed
-        if grep -q "^${msg_id}$" "$PROCESSED_FILE" 2>/dev/null; then
-            continue
-        fi
+        # O(1) lookup instead of grep
+        [[ -n "${PROCESSED_IDS[$msg_id]:-}" ]] && continue
         
         # Validate thread ID format
         if ! [[ "$thread_id" =~ ^[0-9]{17,20}$ ]]; then
             error "Invalid thread ID: $thread_id"
             echo "$msg_id" >> "$PROCESSED_FILE"
+            PROCESSED_IDS["$msg_id"]=1
             continue
         fi
         
         # Look up session in registry
-        local session=$(get_session "$thread_id")
+        local session
+        session=$(get_session "$thread_id")
         
+        if [[ -z "$session" || "$session" == "null" ]]; then
+            if [[ -n "${DROID_TTY:-}" ]] && validate_tty "$DROID_TTY" && tty_has_processes "$DROID_TTY"; then
+                log "Auto-registering thread $thread_id to DROID_TTY=$DROID_TTY"
+                register_session_with_tty "$thread_id" "$thread_name" "$DROID_TTY" ""
+                session=$(get_session "$thread_id")
+            fi
+        fi
+
         if [[ -z "$session" || "$session" == "null" ]]; then
             log "No session for thread $thread_id - message dropped"
             echo "$msg_id" >> "$PROCESSED_FILE"
+            PROCESSED_IDS["$msg_id"]=1
             continue
         fi
         
-        # Extract tty and pid
-        local tty=$(echo "$session" | jq -r '.tty')
-        local pid=$(echo "$session" | jq -r '.pid')
+        # Extract tty and pid in single jq call
+        local tty pid
+        read -r tty pid < <(echo "$session" | jq -r '[.tty, .pid] | @tsv')
         
-        # Verify PID still alive
-        if ! kill -0 "$pid" 2>/dev/null; then
+        # Verify session is still alive
+        if ! is_session_alive "$pid" "$tty"; then
             log "Session $thread_id dead (PID $pid) - cleaning up"
             deregister_session "$thread_id"
             echo "$msg_id" >> "$PROCESSED_FILE"
+            PROCESSED_IDS["$msg_id"]=1
             continue
         fi
         
         # Inject message with [Discord:threadId] prefix
         log "Message from $author -> $tty"
         local prefixed_content="[Discord:$thread_id] $content"
-        local result=$(inject_to_iterm "$tty" "$prefixed_content")
+        local result
+        result=$(inject_to_iterm "$tty" "$prefixed_content") || true
         
         if [[ "$result" == "sent" ]]; then
             log "✓ Delivered"
@@ -93,7 +125,9 @@ process_inbox() {
         fi
         
         echo "$msg_id" >> "$PROCESSED_FILE"
-    done
+        PROCESSED_IDS["$msg_id"]=1
+        
+    done < <(jq -r '.messages[]? | [.id, .threadId, .author.username, (.threadName // ""), .content] | @tsv' "$INBOX_FILE" 2>/dev/null)
     
     # Rotate processed file periodically
     rotate_processed_file
@@ -121,8 +155,8 @@ main() {
     cleanup_dead_sessions
     process_inbox
     
-    # Watch for inbox changes with fswatch
-    fswatch -o --event Updated "$INBOX_FILE" 2>/dev/null | while read -r _; do
+    # Watch for inbox changes with fswatch (handle create/rename)
+    fswatch -o --event Updated --event Created --event Renamed "$FACTORY_DIR" 2>/dev/null | while read -r _; do
         process_inbox
     done
 }

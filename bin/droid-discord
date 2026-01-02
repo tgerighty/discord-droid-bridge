@@ -4,6 +4,8 @@
 # Session management and status commands
 #
 
+set -uo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Source library files
@@ -28,20 +30,128 @@ Bridge Commands:
   stop                        Stop the bridge daemon
   logs                        Show bridge logs
   cleanup                     Remove sessions with dead PIDs
+  send <threadId> [message]   Send a message to a Discord thread (stdin if omitted)
 
 Examples:
   droid-discord register 1234567890123456789 "[myproject:main]"
   droid-discord start-bg
   droid-discord status
+  droid-discord send 1234567890123456789 "Hello from Droid"
 EOF
 }
 
-cmd_register() {
+get_discord_token() {
+    if [[ -n "${DISCORD_TOKEN:-}" ]]; then
+        echo "$DISCORD_TOKEN"
+        return 0
+    fi
+
+    if [[ -f "$HOME/.factory/mcp.json" ]]; then
+        jq -r '.mcpServers.discord.env.DISCORD_TOKEN // empty' "$HOME/.factory/mcp.json"
+        return 0
+    fi
+
+    echo ""
+}
+
+# Normalize token (trim whitespace, remove accidental "Bot " prefix)
+normalize_discord_token() {
+    local token="$1"
+    # Trim whitespace
+    token="${token#"${token%%[![:space:]]*}"}"
+    token="${token%"${token##*[![:space:]]}"}"
+    # Remove "Bot " prefix if present (case-insensitive)
+    if [[ "${token,,}" == bot\ * ]]; then
+        token="${token:4}"
+    fi
+    printf '%s' "$token"
+}
+
+# Simplified text chunking for Discord's 2000 char limit
+chunk_text() {
+    local text="$1"
+    local limit="$2"
+    CHUNKS=()
+
+    [[ -z "$text" ]] && return 0
+    
+    while (( ${#text} > limit )); do
+        local chunk="${text:0:limit}"
+        # Try to break at whitespace using parameter expansion
+        if [[ "$chunk" =~ ^(.*[[:space:]])[^[:space:]]*$ ]]; then
+            chunk="${BASH_REMATCH[1]}"
+        fi
+        # Trim trailing whitespace
+        chunk="${chunk%"${chunk##*[![:space:]]}"}"
+        [[ -n "$chunk" ]] && CHUNKS+=("$chunk")
+        # Remove chunk from text and trim leading whitespace
+        text="${text:${#chunk}}"
+        text="${text#"${text%%[![:space:]]*}"}"
+    done
+    
+    [[ -n "$text" ]] && CHUNKS+=("$text")
+}
+
+send_discord_message() {
     local thread_id="$1"
+    local message="$2"
+    local token
+    token=$(get_discord_token)
+
+    if [[ -z "$token" ]]; then
+        echo "Error: DISCORD_TOKEN not found (set env or ~/.factory/mcp.json)" >&2
+        return 1
+    fi
+
+    # Validate thread ID format
+    if ! [[ "$thread_id" =~ ^[0-9]{17,20}$ ]]; then
+        echo "Error: Invalid thread ID format" >&2
+        return 1
+    fi
+
+    token="$(normalize_discord_token "$token")"
+
+    # Discord message limit is 2000 chars
+    local max_len=2000
+
+    # Create secure temp file for auth header (prevents token exposure in ps output)
+    local header_file
+    header_file=$(secure_temp)
+    printf 'Authorization: Bot %s' "$token" > "$header_file"
+    chmod 600 "$header_file"
+    
+    # Ensure cleanup on exit
+    trap 'rm -f "$header_file" 2>/dev/null' RETURN
+
+    chunk_text "$message" "$max_len"
+    local chunk
+    for chunk in "${CHUNKS[@]}"; do
+        local payload
+        payload=$(printf '%s' "$chunk" | jq -Rs '{content: .}')
+
+        curl -sS -X POST \
+            -H @"$header_file" \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "https://discord.com/api/v10/channels/$thread_id/messages" >/dev/null || return 1
+        sleep 0.2
+    done
+    
+    rm -f "$header_file"
+}
+
+cmd_register() {
+    local thread_id="${1:-}"
     local thread_name="${2:-}"
     
     if [[ -z "$thread_id" ]]; then
         echo "Usage: droid-discord register <threadId> [name]"
+        exit 1
+    fi
+    
+    # Validate thread ID format before any file operations
+    if ! [[ "$thread_id" =~ ^[0-9]{17,20}$ ]]; then
+        echo "Error: Thread ID must be 17-20 digits" >&2
         exit 1
     fi
     
@@ -55,7 +165,7 @@ cmd_register() {
 }
 
 cmd_deregister() {
-    local thread_id="${1:-$DROID_THREAD_ID}"
+    local thread_id="${1:-${DROID_THREAD_ID:-}}"
     
     if [[ -z "$thread_id" ]]; then
         echo "No thread ID provided and DROID_THREAD_ID not set"
@@ -111,6 +221,28 @@ cmd_logs() {
     fi
 }
 
+cmd_send() {
+    local thread_id="$1"
+    shift || true
+
+    if [[ -z "$thread_id" ]]; then
+        echo "Usage: droid-discord send <threadId> [message]"
+        exit 1
+    fi
+
+    local message="$*"
+    if [[ -z "$message" ]]; then
+        message=$(cat)
+    fi
+
+    if [[ -z "$message" ]]; then
+        echo "Error: message is empty" >&2
+        exit 1
+    fi
+
+    send_discord_message "$thread_id" "$message"
+}
+
 case "${1:-}" in
     register)    shift; cmd_register "$@" ;;
     deregister)  shift; cmd_deregister "$@" ;;
@@ -121,6 +253,7 @@ case "${1:-}" in
     start-bg)    cmd_start_bg ;;
     stop)        cmd_stop ;;
     logs)        cmd_logs ;;
+    send)        shift; cmd_send "$@" ;;
     -h|--help|help|"") usage ;;
     *)           echo "Unknown: $1"; usage; exit 1 ;;
 esac

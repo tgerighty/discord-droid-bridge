@@ -2,6 +2,8 @@
 # Discord-Droid Bridge V2 - Configuration
 # Shared constants and paths
 
+set -euo pipefail
+
 # Paths
 FACTORY_DIR="$HOME/.factory"
 INBOX_FILE="$FACTORY_DIR/discord-inbox.json"
@@ -15,8 +17,30 @@ MAX_PROCESSED_ENTRIES=1000
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
 NC='\033[0m'
+
+# Acquire exclusive lock on a file (use for registry/state operations)
+# Usage: acquire_lock <lockfile_path> <fd_number>
+acquire_lock() {
+    local lockfile="$1"
+    local fd="${2:-200}"
+    eval "exec $fd>\"$lockfile\""
+    flock -x "$fd"
+}
+
+# Release lock
+# Usage: release_lock <fd_number>
+release_lock() {
+    local fd="${1:-200}"
+    flock -u "$fd" 2>/dev/null || true
+}
+
+# Secure temp file creation with process-specific directory
+secure_temp() {
+    local private_tmp="${TMPDIR:-/tmp}/droid-bridge-$$"
+    mkdir -p "$private_tmp" && chmod 700 "$private_tmp"
+    mktemp "$private_tmp/XXXXXX"
+}
 
 # Logging functions (consolidated to 2)
 log() {

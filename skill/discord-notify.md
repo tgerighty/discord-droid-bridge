@@ -1,170 +1,132 @@
 ---
 name: discord-notify
-description: Send important messages to Discord when you need user input or have completed a significant task. Use this when awaiting a response, reporting completion, or asking questions - NOT for status updates or tool calls.
+description: Create and manage a Discord session thread for the current Droid session (create thread, watch it, register locally, start the bridge). Also use for sending important messages to Discord when awaiting input or reporting completion.
 ---
 
 # Discord Notification Skill
 
-## CRITICAL: Auto-Response Behavior
+## FIRST: Load Discord Config
 
-**When a Discord thread is active (watched), you MUST:**
-
-1. **ALWAYS respond to Discord** - Every message from Discord (injected via bridge) MUST get a response sent back to the Discord thread using `discord_send_thread_message`. Send the FULL response you show in the CLI, not a summary.
-2. Check for unread messages at the START of processing any user message
-3. After completing any significant task, send a summary to Discord
-
-**If a message came from Discord (injected by bridge), ALWAYS reply to Discord, not just the CLI.**
-
-The bridge prefixes Discord messages with `[Discord:<threadId>]` - when you see this prefix, your response MUST go to that Discord thread using:
-```
-discord_send_thread_message(threadId: "<threadId from prefix>", message: "<your full response>")
-```
-
-**Thread Ownership:** Each session has its own threadId. Only check/respond to YOUR session's thread by filtering with the threadId you created.
-
-**Current session threadId:** Store this when you create/watch a thread and use it for all responses.
-
-## When to Use This Skill
-
-Invoke this skill when you need to notify the user via Discord. Use it for:
-
-1. **Asking questions that need user input** - When you're blocked and need clarification
-2. **Task completion** - When a significant task or feature is complete
-3. **Errors requiring attention** - When something failed that the user needs to know about
-4. **Decisions needed** - When there are multiple options and you need the user to choose
-
-## When NOT to Use This Skill
-
-Do NOT send Discord messages for:
-- Progress updates or status messages
-- Tool call results
-- Intermediate steps
-- Confirmations of small actions
-- Working messages or thinking out loud
-
-## Thread-Based Communication
-
-Each Droid session should use its own thread to keep conversations organized.
-
-### Starting a Session Thread (V2 - iTerm2 Only)
-
-**Automatic Registration via Hooks:**
-
-If `DROID_THREAD_ID` is set in the environment BEFORE starting Droid, the session hook will automatically register/deregister the session. The user can set this in their shell:
+**BEFORE doing anything else**, read the config file:
 
 ```bash
-export DROID_THREAD_ID="<thread-id>"
-droid  # Session auto-registers on start, auto-deregisters on end
+cat ~/.factory/discord-config.json
 ```
 
-**Manual Thread Creation:**
-
-If starting fresh (no existing thread), create and watch one:
-
+Expected format:
+```json
+{
+  "guildId": "YOUR_SERVER_ID",
+  "channelId": "YOUR_CHANNEL_ID"
+}
 ```
-// 1. Create the thread (name format: [project:branch] - date time)
+
+**If the file doesn't exist or is missing IDs**, tell the user:
+
+> Discord is not configured. Create `~/.factory/discord-config.json`:
+> ```json
+> {
+>   "guildId": "YOUR_SERVER_ID",
+>   "channelId": "YOUR_CHANNEL_ID"
+> }
+> ```
+> To get these IDs in Discord:
+> 1. Enable Developer Mode: User Settings → Advanced → Developer Mode
+> 2. Right-click server icon → "Copy Server ID"
+> 3. Right-click channel → "Copy Channel ID"
+
+**Store the `channelId`** - use it for `discord_create_thread`.
+**Do NOT call server lookup tools** (avoid `discord_get_server_info` / `discord_list_servers`). The config already has what you need.
+
+If `DROID_TTY` is not set, prompt the user to add this to `~/.zshrc`:
+```bash
+export DROID_TTY=$(tty 2>/dev/null || echo "")
+```
+
+## Primary Trigger
+
+If the user says any of the following (or close variants), you MUST run the session setup steps below:
+- "Create a Discord thread for this session"
+- "Create a Discord thread for this session and register it"
+- "Set up Discord for this session"
+
+## Auto-Response Behavior
+
+Use hooks for deterministic replies. The bridge prefixes Discord messages with `[Discord:<threadId>]` in the terminal.
+
+## When to Use
+
+- **Questions needing input** - When blocked
+- **Task completion** - Significant work done
+- **Errors** - Something failed
+- **Decisions** - Multiple options to choose
+
+Do NOT use for: progress updates, tool results, intermediate steps.
+
+## Starting a Session Thread
+
+### Step 1: Read Config
+```bash
+cat ~/.factory/discord-config.json
+```
+
+### Step 2: Create Thread
+Use `channelId` from config:
+```
 discord_create_thread(
-  channelId: "YOUR_CHANNEL_ID",
-  name: "[project-name:branch] - YYYY-MM-DD HH:MM",
-  message: "Session started. Working on: <brief description>"
+  channelId: "<channelId-from-config>",
+  name: "[project:branch] - YYYY-MM-DD HH:MM",
+  message: "Session started. Working on: <short description>"
 )
+```
 
-// 2. Watch it for incoming messages (use the returned threadId)
+### Step 3: Watch Thread
+```
 discord_watch_thread(threadId: "<returned-thread-id>")
-
-// 3. Register the session (bridge will route messages to this terminal)
 ```
 
-**Self-Registration (if not using hooks):**
-
-After creating/watching the thread, register by executing:
-
+### Step 4: Register Session (Required)
 ```bash
-# Register session and ensure bridge is running
-THREAD_ID="<your-thread-id>" && \
-droid-discord register "$THREAD_ID" "[project:branch]" && \
-droid-discord start-bg 2>/dev/null || echo "Bridge already running"
+THREAD_ID="<thread-id>" && \
+THREAD_NAME="[project:branch]" && \
+echo "$THREAD_ID" > "$HOME/.factory/current-discord-session" && \
+droid-discord register "$THREAD_ID" "$THREAD_NAME" && \
+pgrep -f "bridge-v2.sh" > /dev/null || droid-discord start-bg
 ```
 
-Store the returned `threadId` for all subsequent messages in this session.
+Store the `threadId` for all messages in this session.
 
-**V2 Benefits:**
-- Messages inject directly into iTerm2 without stealing focus
-- TTY-based routing is more reliable than window title matching
-- Auto-deregister when terminal closes
-- Branch change detection prompts to rename thread
-
-### Branch Changes
-
-When the user changes git branches, the shell hook will prompt them:
+### Step 5: Confirm Registration
+```bash
+droid-discord status
 ```
-[droid] Branch changed: main -> feature/new-feature
-To rename Discord thread, run in Droid:
-  discord_rename_thread(threadId: "...", newName: "[project:feature/new-feature] - ...")
-```
+If the session is not registered, repeat Step 4.
 
-You can then call `discord_rename_thread` to update the thread name.
+## Sending Messages
 
-### Sending Messages
-
-Use `discord_send_thread_message` with the session's threadId:
 ```
 discord_send_thread_message(threadId: "<session-thread-id>", message: "Your message")
 ```
 
-### Reading Responses (Automatic Inbox)
+## Reading Responses
 
-Once a thread is watched, user replies are automatically collected. Check the inbox:
 ```
 discord_get_unread_messages(threadId: "<session-thread-id>")
 ```
 
-This returns only unread messages from non-bot users and marks them as read.
-
-### Workflow Example
-
-1. Create thread + watch it at session start
-2. Send message when you need user input
-3. Continue working on other tasks
-4. Periodically call `discord_get_unread_messages` to check for replies
-5. Process any responses and continue
-
-## Message Format
-
-Keep Discord messages concise and actionable:
-- State clearly what you need
-- If asking a question, make it specific
-- If reporting completion, summarize what was done
-
-## Example Messages
-
-**Good (needs response):**
-"Should I use JWT or session-based authentication? JWT is simpler but sessions give better revocation control."
-
-**Good (task complete):**
-"Completed: Added user registration endpoint with email verification. Ready for testing."
-
-**Good (error/blocked):**
-"Build failing - missing STRIPE_KEY env var. Should I add it to .env.example?"
-
-**Bad (don't send):**
-"Running npm install..."
-"Reading file src/index.ts..."
-"Found 3 matches for the pattern..."
-
 ## Quick Reference
 
-- **Channel ID:** Your Discord channel ID
-- **Create thread:** `discord_create_thread`
-- **Watch thread:** `discord_watch_thread` (enables auto-inbox)
-- **Send to thread:** `discord_send_thread_message`
-- **Rename thread:** `discord_rename_thread` (for branch changes)
-- **Get unread:** `discord_get_unread_messages` (from watched threads)
-- **Read all:** `discord_read_thread_messages`
-- **Clear inbox:** `discord_clear_inbox`
-- **Stop watching:** `discord_unwatch_thread`
+| Action | Command |
+|--------|---------|
+| Create thread | `discord_create_thread(channelId, name, message)` |
+| Watch thread | `discord_watch_thread(threadId)` |
+| Send message | `discord_send_thread_message(threadId, message)` |
+| Get unread | `discord_get_unread_messages(threadId)` |
+| Rename thread | `discord_rename_thread(threadId, newName)` |
+| Stop watching | `discord_unwatch_thread(threadId)` |
 
-**Terminal commands (user runs these):**
-- `droid-register <threadId>` - Register session for message injection
-- `droid-status` - Show current session status
-- `droid-discord start-bg` - Start bridge daemon in background
+**User commands:**
+- `droid-discord register <threadId> [name]` - Register session
+- `droid-discord status` - Show status
+- `droid-discord start-bg` - Start bridge daemon
+- `droid-discord send <threadId> [message]` - Send message to Discord (stdin if omitted)
