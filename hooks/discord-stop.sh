@@ -7,6 +7,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Secure temp file creation
+secure_temp() {
+    local private_tmp="${TMPDIR:-/tmp}/droid-bridge-$$"
+    mkdir -p "$private_tmp" && chmod 700 "$private_tmp"
+    mktemp "$private_tmp/XXXXXX"
+}
+
 # Stop the heartbeat daemon (Droid finished responding)
 "$SCRIPT_DIR/discord-heartbeat.sh" stop >/dev/null 2>&1 || true
 
@@ -53,7 +60,7 @@ fingerprint=$(printf '%s' "$message" | shasum -a 256 | awk '{print $1}')
         exit 0
     fi
 
-    tmp=$(mktemp)
+    tmp=$(secure_temp)
     if [[ -f "$state_file" ]]; then
         jq --arg tid "$thread_id" --arg fp "$fingerprint" '.[$tid] = $fp' "$state_file" > "$tmp"
     else

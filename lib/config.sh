@@ -69,7 +69,8 @@ rotate_processed_file() {
     if [[ -f "$PROCESSED_FILE" ]]; then
         local count=$(wc -l < "$PROCESSED_FILE" 2>/dev/null || echo 0)
         if [[ $count -gt $MAX_PROCESSED_ENTRIES ]]; then
-            local tmp=$(mktemp)
+            local tmp
+            tmp=$(secure_temp)
             tail -n "$MAX_PROCESSED_ENTRIES" "$PROCESSED_FILE" > "$tmp"
             mv "$tmp" "$PROCESSED_FILE"
             log "Rotated processed file (kept last $MAX_PROCESSED_ENTRIES entries)"

@@ -23,6 +23,29 @@ tty_has_processes() {
     ps -t "$short" 2>/dev/null | awk 'NR>1{found=1; exit} END{exit (found ? 0 : 1)}'
 }
 
+# Get process start time (for PID reuse detection)
+# Returns empty string if process doesn't exist
+get_pid_start_time() {
+    local pid="$1"
+    [[ -z "$pid" || ! "$pid" =~ ^[0-9]+$ ]] && return 1
+    ps -p "$pid" -o lstart= 2>/dev/null | tr -d '\n'
+}
+
+# Check if PID is the same process (by start time)
+is_same_process() {
+    local pid="$1"
+    local stored_start_time="$2"
+    
+    [[ -z "$pid" || ! "$pid" =~ ^[0-9]+$ ]] && return 1
+    [[ -z "$stored_start_time" || "$stored_start_time" == "null" ]] && return 1
+    
+    local current_start
+    current_start=$(get_pid_start_time "$pid")
+    [[ -z "$current_start" ]] && return 1
+    
+    [[ "$current_start" == "$stored_start_time" ]]
+}
+
 # Initialize registry if it doesn't exist
 init_registry() {
     if [[ ! -f "$SESSIONS_FILE" ]]; then
@@ -67,6 +90,12 @@ register_session() {
 
     init_registry
 
+    # Get PID start time for reuse detection
+    local pid_start=""
+    if [[ -n "$pid" && "$pid" != "null" && "$pid" =~ ^[0-9]+$ ]]; then
+        pid_start=$(get_pid_start_time "$pid" 2>/dev/null || echo "")
+    fi
+
     # Use file locking for atomic update
     local lockfile="$SESSIONS_FILE.lock"
     local tmp
@@ -81,15 +110,16 @@ register_session() {
                --arg tty "$current_tty" \
                --arg name "$thread_name" \
                --arg now "$now" \
-               '.sessions[$tid] = {tty: $tty, pid: null, name: $name, registered: $now}' \
+               '.sessions[$tid] = {tty: $tty, pid: null, pidStart: null, name: $name, registered: $now}' \
                "$SESSIONS_FILE" > "$tmp"
         else
             jq --arg tid "$thread_id" \
                --arg tty "$current_tty" \
                --argjson pid "$pid" \
+               --arg pidStart "$pid_start" \
                --arg name "$thread_name" \
                --arg now "$now" \
-               '.sessions[$tid] = {tty: $tty, pid: $pid, name: $name, registered: $now}' \
+               '.sessions[$tid] = {tty: $tty, pid: $pid, pidStart: $pidStart, name: $name, registered: $now}' \
                "$SESSIONS_FILE" > "$tmp"
         fi
         

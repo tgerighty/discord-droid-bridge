@@ -134,6 +134,8 @@ send_discord_message() {
         payload=$(printf '%s' "$chunk" | jq -Rs '{content: .}')
 
         curl -sS -X POST \
+            --connect-timeout 10 \
+            --max-time 30 \
             -H @"$header_file" \
             -H "Content-Type: application/json" \
             -d "$payload" \

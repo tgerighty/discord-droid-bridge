@@ -44,26 +44,43 @@ check_dependencies() {
     fi
 }
 
-# Check if session is alive (PID running or TTY has processes)
+# Check if session is alive (PID running with same start time, or TTY has processes)
 is_session_alive() {
     local pid="$1"
     local tty="$2"
+    local pid_start="${3:-}"
     
-    # If PID is valid and running, session is alive
+    # If PID is valid and running, verify it's the same process (prevent PID reuse false positive)
     if [[ -n "$pid" && "$pid" != "null" && "$pid" =~ ^[0-9]+$ ]]; then
-        kill -0 "$pid" 2>/dev/null && return 0
+        if kill -0 "$pid" 2>/dev/null; then
+            # If we have stored start time, verify it matches
+            if [[ -n "$pid_start" && "$pid_start" != "null" ]]; then
+                is_same_process "$pid" "$pid_start" && return 0
+            else
+                # No start time stored, fall back to basic kill check
+                return 0
+            fi
+        fi
     fi
     
     # Otherwise check if TTY has any processes
     tty_has_processes "$tty"
 }
 
-# Process new messages from inbox
+# Process new messages from inbox with atomic snapshot
 process_inbox() {
     [[ ! -f "$INBOX_FILE" ]] && return 0
 
     # Reload processed IDs to catch any external changes
     load_processed_ids
+
+    # Take atomic snapshot of inbox to prevent race conditions
+    local inbox_snapshot
+    inbox_snapshot=$(secure_temp)
+    cp "$INBOX_FILE" "$inbox_snapshot" 2>/dev/null || { rm -f "$inbox_snapshot"; return 0; }
+    
+    # Ensure cleanup of snapshot
+    trap 'rm -f "$inbox_snapshot" 2>/dev/null' RETURN
 
     # Process each message - single jq call extracts all fields (performance optimization)
     while IFS=$'\t' read -r msg_id thread_id author thread_name content; do
@@ -99,12 +116,12 @@ process_inbox() {
             continue
         fi
         
-        # Extract tty and pid in single jq call
-        local tty pid
-        read -r tty pid < <(echo "$session" | jq -r '[.tty, .pid] | @tsv')
+        # Extract tty, pid, and pidStart in single jq call
+        local tty pid pid_start
+        read -r tty pid pid_start < <(echo "$session" | jq -r '[.tty, .pid, .pidStart] | @tsv')
         
-        # Verify session is still alive
-        if ! is_session_alive "$pid" "$tty"; then
+        # Verify session is still alive (with PID reuse protection)
+        if ! is_session_alive "$pid" "$tty" "$pid_start"; then
             log "Session $thread_id dead (PID $pid) - cleaning up"
             deregister_session "$thread_id"
             echo "$msg_id" >> "$PROCESSED_FILE"
@@ -127,7 +144,9 @@ process_inbox() {
         echo "$msg_id" >> "$PROCESSED_FILE"
         PROCESSED_IDS["$msg_id"]=1
         
-    done < <(jq -r '.messages[]? | [.id, .threadId, .author.username, (.threadName // ""), .content] | @tsv' "$INBOX_FILE" 2>/dev/null)
+    done < <(jq -r '.messages[]? | [.id, .threadId, .author.username, (.threadName // ""), .content] | @tsv' "$inbox_snapshot" 2>/dev/null)
+    
+    rm -f "$inbox_snapshot" 2>/dev/null
     
     # Rotate processed file periodically
     rotate_processed_file
