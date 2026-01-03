@@ -31,6 +31,7 @@ Session Registry → bridge-v2.sh → iTerm2 (direct TTY write, no focus steal)
 - **[Droid CLI](https://factory.ai)** installed
 - **jq** (`brew install jq`)
 - **fswatch** (`brew install fswatch`)
+- **flock** (`brew install flock`)
 - **Discord bot** with Message Content Intent enabled
 
 ## Quick Start

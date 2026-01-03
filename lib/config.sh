@@ -21,18 +21,67 @@ NC='\033[0m'
 
 # Acquire exclusive lock on a file (use for registry/state operations)
 # Usage: acquire_lock <lockfile_path> <fd_number>
+set_lockdir() {
+    local fd="$1"
+    local dir="$2"
+    eval "LOCK_DIR_$fd=\"$dir\""
+}
+
+get_lockdir() {
+    local fd="$1"
+    eval "printf '%s' \"\${LOCK_DIR_$fd:-}\""
+}
+
+unset_lockdir() {
+    local fd="$1"
+    eval "unset LOCK_DIR_$fd"
+}
+
 acquire_lock() {
     local lockfile="$1"
     local fd="${2:-200}"
-    eval "exec $fd>\"$lockfile\""
-    flock -x "$fd"
+
+    if command -v flock >/dev/null 2>&1; then
+        eval "exec $fd>\"$lockfile\""
+        flock -x "$fd"
+        return 0
+    fi
+
+    # Fallback: mkdir-based lock with timeout to avoid deadlocks.
+    local lockdir="${lockfile}.d"
+    local waited=0
+    local timeout=5
+
+    while ! mkdir "$lockdir" 2>/dev/null; do
+        sleep 0.1
+        waited=$(awk "BEGIN {print $waited + 0.1}")
+        if awk "BEGIN {exit !($waited >= $timeout)}"; then
+            echo "ERROR: Lock timeout: $lockfile" >&2
+            return 1
+        fi
+    done
+
+    echo "$$" > "$lockdir/pid"
+    set_lockdir "$fd" "$lockdir"
 }
 
 # Release lock
 # Usage: release_lock <fd_number>
 release_lock() {
     local fd="${1:-200}"
-    flock -u "$fd" 2>/dev/null || true
+
+    if command -v flock >/dev/null 2>&1; then
+        flock -u "$fd" 2>/dev/null || true
+        return 0
+    fi
+
+    local lockdir
+    lockdir=$(get_lockdir "$fd")
+    if [[ -n "$lockdir" ]]; then
+        rm -f "$lockdir/pid" 2>/dev/null || true
+        rmdir "$lockdir" 2>/dev/null || true
+        unset_lockdir "$fd"
+    fi
 }
 
 # Secure temp file creation with process-specific directory
