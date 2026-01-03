@@ -21,6 +21,8 @@ Session Registry → bridge-v2.sh → iTerm2 (direct TTY write, no focus steal)
 - **No focus stealing** - Messages inject directly via iTerm2's `write text` API
 - **Multi-session support** - Each Droid session gets its own Discord thread
 - **Auto-registration** - Skill handles session setup automatically
+- **Session resume** - Reconnect to previous threads after terminal restart
+- **Heartbeat feedback** - Periodic "still working" messages during long tasks
 
 ## Prerequisites
 
@@ -218,24 +220,57 @@ Example messages:
 ## CLI Commands
 
 ```bash
-droid-discord register <threadId> [name]  # Register session
+# Session management
+droid-discord register <threadId> [name]  # Register session with Discord thread
+droid-discord resume [threadId]           # Resume previous thread (re-register + notify)
 droid-discord deregister [threadId]       # Deregister session
 droid-discord status                      # Show current session
 droid-discord list                        # List all sessions
+droid-discord last                        # Show last used thread ID
+
+# Bridge control
 droid-discord start                       # Start bridge (foreground)
 droid-discord start-bg                    # Start bridge (background)
 droid-discord stop                        # Stop bridge
 droid-discord logs                        # Show bridge logs
+droid-discord cleanup                     # Remove sessions with dead PIDs
+
+# Messaging
 droid-discord send <threadId> [message]   # Send message to Discord thread (stdin if omitted)
 ```
+
+### Resuming a Previous Thread
+
+If you closed Droid or the bridge stopped, you can resume your last Discord thread:
+
+```bash
+# Resume the last thread you used
+droid-discord resume
+
+# Resume a specific thread
+droid-discord resume 1234567890123456789
+
+# Check what the last thread was
+droid-discord last
+```
+
+The `resume` command:
+1. Re-registers the thread with your current TTY
+2. Starts the bridge daemon if not running
+3. Sends "Session resumed. I'm back and listening!" to Discord
+
+**Note:** After resuming, use the skill to call `discord_watch_thread()` so you receive incoming messages.
 
 ## Files
 
 | File | Location | Purpose |
 |------|----------|---------|
 | `droid-sessions.json` | `~/.factory/` | Session registry |
+| `current-discord-session` | `~/.factory/` | Last used thread ID (for `resume` command) |
 | `discord-inbox.json` | `~/.factory/` | Incoming messages (from mcp-discord) |
-| `discord-queue.json` | `~/.factory/` | Retry queue |
+| `discord-inbox-processed.txt` | `~/.factory/` | Processed message IDs |
+| `discord-outbound-state.json` | `~/.factory/` | Dedup state for outbound messages |
+| `discord-heartbeat.pid` | `~/.factory/` | Heartbeat daemon PID |
 | `bridge-v2.log` | `~/.factory/` | Bridge logs |
 
 ## Troubleshooting
@@ -253,9 +288,34 @@ The session wasn't registered. Run the skill's registration command or manually:
 droid-discord register <threadId> "[project:branch]"
 ```
 
+### Resuming after closing terminal
+
+If you closed your terminal or started a new session:
+```bash
+# Resume the last thread
+droid-discord resume
+
+# Then use the skill to watch for incoming messages
+# (call discord_watch_thread with the thread ID)
+```
+
+### Session disconnected but thread still exists
+
+Use `resume` to reconnect:
+```bash
+droid-discord resume
+```
+
 ### Permission errors
 
 Grant Accessibility permissions to iTerm2 and `/usr/bin/osascript` in System Settings.
+
+### Heartbeat not stopping
+
+Manually stop the heartbeat daemon:
+```bash
+~/.factory/hooks/discord-heartbeat.sh stop
+```
 
 ## How Sessions Work
 

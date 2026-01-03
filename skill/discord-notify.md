@@ -50,6 +50,13 @@ If the user says any of the following (or close variants), you MUST run the sess
 - "Create a Discord thread for this session and register it"
 - "Set up Discord for this session"
 
+**To resume an existing thread**, if the user says:
+- "Resume Discord thread"
+- "Reconnect to Discord"
+- "Use the last Discord thread"
+
+Run the **Resume Thread** steps instead of creating a new one.
+
 ## Auto-Response Behavior
 
 Use hooks for deterministic replies. The bridge prefixes Discord messages with `[Discord:<threadId>]` in the terminal.
@@ -71,14 +78,17 @@ cat ~/.factory/discord-config.json
 ```
 
 ### Step 2: Create Thread
-Use `channelId` from config:
+Use `channelId` from config. Include the **model name** in the thread title:
 ```
 discord_create_thread(
   channelId: "<channelId-from-config>",
-  name: "[project:branch] - YYYY-MM-DD HH:MM",
-  message: "Session started. Working on: <short description>"
+  name: "[project:branch] <model> - YYYY-MM-DD HH:MM",
+  message: "Session started with <model>. Working on: <short description>"
 )
 ```
+
+**Model name**: Use the current model (e.g., "Claude Opus 4.5", "GPT-5.2", "GLM-4.7"). 
+Check your model from the session context or use a short identifier.
 
 ### Step 3: Watch Thread
 ```
@@ -114,6 +124,31 @@ discord_send_thread_message(threadId: "<session-thread-id>", message: "Your mess
 discord_get_unread_messages(threadId: "<session-thread-id>")
 ```
 
+## Resuming an Existing Thread
+
+If you have a previous thread you want to reconnect to:
+
+### Option 1: Resume Last Thread (Easiest)
+```bash
+droid-discord resume
+```
+This resumes the last used thread, re-registers it with the current TTY, starts the bridge, and sends a "Session resumed" message.
+
+### Option 2: Resume Specific Thread
+```bash
+droid-discord resume <threadId> "[optional-name]"
+```
+
+### Option 3: Check Last Thread ID
+```bash
+droid-discord last
+```
+
+After resuming, you still need to call `discord_watch_thread()` to receive messages:
+```
+discord_watch_thread(threadId: "<thread-id>")
+```
+
 ## Quick Reference
 
 | Action | Command |
@@ -127,6 +162,8 @@ discord_get_unread_messages(threadId: "<session-thread-id>")
 
 **User commands:**
 - `droid-discord register <threadId> [name]` - Register session
+- `droid-discord resume [threadId]` - Resume previous thread
+- `droid-discord last` - Show last thread ID
 - `droid-discord status` - Show status
 - `droid-discord start-bg` - Start bridge daemon
 - `droid-discord send <threadId> [message]` - Send message to Discord (stdin if omitted)

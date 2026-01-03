@@ -20,9 +20,11 @@ Usage: droid-discord <command> [args]
 
 Session Commands:
   register <threadId> [name]  Register current session with Discord thread
+  resume [threadId]           Resume a previous thread (re-register + notify)
   deregister [threadId]       Deregister session
   status                      Show current session status
   list                        List all registered sessions
+  last                        Show last used thread ID
 
 Bridge Commands:
   start                       Start the bridge daemon (foreground)
@@ -34,6 +36,8 @@ Bridge Commands:
 
 Examples:
   droid-discord register 1234567890123456789 "[myproject:main]"
+  droid-discord resume                        # Resume last thread
+  droid-discord resume 1234567890123456789    # Resume specific thread
   droid-discord start-bg
   droid-discord status
   droid-discord send 1234567890123456789 "Hello from Droid"
@@ -164,6 +168,65 @@ cmd_register() {
     echo "Export thread ID: export DROID_THREAD_ID=$thread_id"
 }
 
+cmd_resume() {
+    local thread_id="${1:-}"
+    local thread_name="${2:-}"
+    
+    # If no thread ID provided, try to get last used
+    if [[ -z "$thread_id" ]]; then
+        if [[ -f "$HOME/.factory/current-discord-session" ]]; then
+            thread_id=$(cat "$HOME/.factory/current-discord-session")
+        fi
+    fi
+    
+    if [[ -z "$thread_id" ]]; then
+        echo "No thread ID provided and no previous session found"
+        echo "Usage: droid-discord resume [threadId] [name]"
+        exit 1
+    fi
+    
+    # Validate thread ID format
+    if ! [[ "$thread_id" =~ ^[0-9]{17,20}$ ]]; then
+        echo "Error: Thread ID must be 17-20 digits" >&2
+        exit 1
+    fi
+    
+    echo "Resuming Discord thread: $thread_id"
+    
+    # Re-register with current TTY
+    register_session "$thread_id" "$thread_name"
+    
+    # Save as current session
+    echo "$thread_id" > "$HOME/.factory/current-discord-session"
+    
+    # Ensure bridge is running
+    if ! pgrep -f "bridge-v2.sh" > /dev/null; then
+        echo "Starting bridge daemon..."
+        nohup "$SCRIPT_DIR/bridge-v2.sh" >> "$LOG_FILE" 2>&1 &
+        sleep 0.5
+    fi
+    
+    # Send resume notification to Discord
+    send_discord_message "$thread_id" "Session resumed. I'm back and listening!" 2>/dev/null || true
+    
+    echo ""
+    echo "✓ Thread resumed and bridge running"
+    echo "Export thread ID: export DROID_THREAD_ID=$thread_id"
+    echo ""
+    echo "Note: Use the discord-notify skill to also call discord_watch_thread()"
+}
+
+cmd_last() {
+    if [[ -f "$HOME/.factory/current-discord-session" ]]; then
+        local thread_id
+        thread_id=$(cat "$HOME/.factory/current-discord-session")
+        echo "$thread_id"
+    else
+        echo "No previous session found" >&2
+        exit 1
+    fi
+}
+
 cmd_deregister() {
     local thread_id="${1:-${DROID_THREAD_ID:-}}"
     
@@ -245,9 +308,11 @@ cmd_send() {
 
 case "${1:-}" in
     register)    shift; cmd_register "$@" ;;
+    resume)      shift; cmd_resume "$@" ;;
     deregister)  shift; cmd_deregister "$@" ;;
     status)      cmd_status ;;
     list)        cmd_list ;;
+    last)        cmd_last ;;
     cleanup)     cmd_cleanup ;;
     start)       cmd_start ;;
     start-bg)    cmd_start_bg ;;
