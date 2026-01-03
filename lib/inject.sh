@@ -2,14 +2,9 @@
 # Discord-Droid Bridge V2 - iTerm2 Injection
 # Direct session write without focus stealing
 
-# Validate TTY format (security: prevent injection via malformed TTY)
-# Usage: validate_tty <tty>
-# Returns: 0 if valid, 1 if invalid
-validate_tty() {
-    local tty="$1"
-    # TTY must match /dev/ttysNNN pattern exactly
-    [[ "$tty" =~ ^/dev/ttys[0-9]+$ ]]
-}
+set -euo pipefail
+
+# Note: validate_tty is defined in registry.sh (sourced via config.sh)
 
 # Validate and sanitize message for AppleScript injection
 # Usage: sanitize_message <message>
@@ -17,8 +12,8 @@ validate_tty() {
 sanitize_message() {
     local msg="$1"
     
-    # Reject messages with control characters (except newline which we'll handle)
-    if [[ "$msg" =~ [[:cntrl:]] && ! "$msg" =~ $'\n' ]]; then
+    # Reject messages with control characters (newlines are handled separately)
+    if printf '%s' "$msg" | tr -d '\n' | LC_ALL=C grep -q '[[:cntrl:]]'; then
         echo "error:message contains control characters"
         return 1
     fi
