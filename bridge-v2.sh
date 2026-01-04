@@ -14,17 +14,16 @@ source "$SCRIPT_DIR/lib/config.sh"
 source "$SCRIPT_DIR/lib/registry.sh"
 source "$SCRIPT_DIR/lib/inject.sh"
 
-# Associative array for O(1) processed message lookup
-declare -A PROCESSED_IDS
+# Check if message ID has been processed (file-based for Bash 3.2 compatibility)
+is_processed() {
+    local msg_id="$1"
+    [[ -f "$PROCESSED_FILE" ]] && grep -qxF "$msg_id" "$PROCESSED_FILE" 2>/dev/null
+}
 
-# Load processed IDs into memory
-load_processed_ids() {
-    PROCESSED_IDS=()
-    if [[ -f "$PROCESSED_FILE" ]]; then
-        while IFS= read -r id; do
-            [[ -n "$id" ]] && PROCESSED_IDS["$id"]=1
-        done < "$PROCESSED_FILE"
-    fi
+# Mark message ID as processed
+mark_processed() {
+    local msg_id="$1"
+    echo "$msg_id" >> "$PROCESSED_FILE"
 }
 
 # Check dependencies
@@ -71,9 +70,6 @@ is_session_alive() {
 process_inbox() {
     [[ ! -f "$INBOX_FILE" ]] && return 0
 
-    # Reload processed IDs to catch any external changes
-    load_processed_ids
-
     # Take atomic snapshot of inbox to prevent race conditions
     local inbox_snapshot
     inbox_snapshot=$(secure_temp)
@@ -86,14 +82,13 @@ process_inbox() {
     while IFS=$'\t' read -r msg_id thread_id author thread_name content; do
         [[ -z "$msg_id" ]] && continue
         
-        # O(1) lookup instead of grep
-        [[ -n "${PROCESSED_IDS[$msg_id]:-}" ]] && continue
+        # Skip already processed messages
+        is_processed "$msg_id" && continue
         
         # Validate thread ID format
         if ! [[ "$thread_id" =~ ^[0-9]{17,20}$ ]]; then
             error "Invalid thread ID: $thread_id"
-            echo "$msg_id" >> "$PROCESSED_FILE"
-            PROCESSED_IDS["$msg_id"]=1
+            mark_processed "$msg_id"
             continue
         fi
         
@@ -102,17 +97,8 @@ process_inbox() {
         session=$(get_session "$thread_id")
         
         if [[ -z "$session" || "$session" == "null" ]]; then
-            if [[ -n "${DROID_TTY:-}" ]] && validate_tty "$DROID_TTY" && tty_has_processes "$DROID_TTY"; then
-                log "Auto-registering thread $thread_id to DROID_TTY=$DROID_TTY"
-                register_session_with_tty "$thread_id" "$thread_name" "$DROID_TTY" ""
-                session=$(get_session "$thread_id")
-            fi
-        fi
-
-        if [[ -z "$session" || "$session" == "null" ]]; then
             log "No session for thread $thread_id - message dropped"
-            echo "$msg_id" >> "$PROCESSED_FILE"
-            PROCESSED_IDS["$msg_id"]=1
+            mark_processed "$msg_id"
             continue
         fi
         
@@ -124,8 +110,7 @@ process_inbox() {
         if ! is_session_alive "$pid" "$tty" "$pid_start"; then
             log "Session $thread_id dead (PID $pid) - cleaning up"
             deregister_session "$thread_id"
-            echo "$msg_id" >> "$PROCESSED_FILE"
-            PROCESSED_IDS["$msg_id"]=1
+            mark_processed "$msg_id"
             continue
         fi
         
@@ -141,8 +126,7 @@ process_inbox() {
             error "Injection failed: $result"
         fi
         
-        echo "$msg_id" >> "$PROCESSED_FILE"
-        PROCESSED_IDS["$msg_id"]=1
+        mark_processed "$msg_id"
         
     done < <(jq -r '.messages[]? | [.id, .threadId, .author.username, (.threadName // ""), .content] | @tsv' "$inbox_snapshot" 2>/dev/null)
     
