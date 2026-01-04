@@ -174,8 +174,9 @@ get_session() {
     jq -r --arg tid "$thread_id" '.sessions[$tid] // null' "$SESSIONS_FILE"
 }
 
-# Clean up sessions with dead PIDs (batch operation)
-# Optimized: single jq call to get all tid:pid pairs, batch deletion
+# Clean up sessions with dead PIDs/TTYs (batch operation)
+# Only removes sessions where BOTH PID is dead AND TTY has no processes
+# Sessions with null PID are kept if TTY is still active
 # Usage: cleanup_dead_sessions
 cleanup_dead_sessions() {
     [[ ! -f "$SESSIONS_FILE" ]] && return 0
@@ -190,19 +191,34 @@ cleanup_dead_sessions() {
         
         sessions_data=$(cat "$SESSIONS_FILE")
         
-        # Single jq call to extract all tid:pid pairs
-        while IFS=$'\t' read -r tid pid; do
+        # Extract tid, pid, and tty for each session
+        while IFS=$'\t' read -r tid pid tty; do
             [[ -z "$tid" ]] && continue
             
-            # Validate PID is numeric before kill check
+            local is_dead=false
+            
+            # Check PID first (if set)
             if [[ -n "$pid" && "$pid" != "null" && "$pid" =~ ^[0-9]+$ ]]; then
                 if ! kill -0 "$pid" 2>/dev/null; then
-                    # Collect dead thread IDs
-                    dead_tids="$dead_tids $tid"
-                    ((removed++)) || true
+                    is_dead=true
+                fi
+            else
+                # No PID - check TTY instead
+                is_dead=true
+            fi
+            
+            # If PID is dead/missing, check if TTY still has processes
+            if [[ "$is_dead" == "true" ]] && [[ -n "$tty" ]]; then
+                if tty_has_processes "$tty" 2>/dev/null; then
+                    is_dead=false  # TTY is active, keep session
                 fi
             fi
-        done < <(echo "$sessions_data" | jq -r '.sessions | to_entries[] | [.key, .value.pid] | @tsv' 2>/dev/null)
+            
+            if [[ "$is_dead" == "true" ]]; then
+                dead_tids="$dead_tids $tid"
+                ((removed++)) || true
+            fi
+        done < <(echo "$sessions_data" | jq -r '.sessions | to_entries[] | [.key, .value.pid, .value.tty] | @tsv' 2>/dev/null)
         
         # Single jq call to remove all dead sessions
         if [[ $removed -gt 0 ]]; then
