@@ -78,17 +78,14 @@ cat ~/.factory/discord-config.json
 ```
 
 ### Step 2: Create Thread
-Use `channelId` from config. Include the **model name** in the thread title:
+Use `channelId` from config:
 ```
 discord_create_thread(
   channelId: "<channelId-from-config>",
-  name: "[project:branch] <model> - YYYY-MM-DD HH:MM",
-  message: "Session started with <model>. Working on: <short description>"
+  name: "[project:branch] YYYY-MM-DD HH:MM",
+  message: "Session started. Working on: <short description>"
 )
 ```
-
-**Model name**: Use the current model (e.g., "Claude Opus 4.5", "GPT-5.2", "GLM-4.7"). 
-Check your model from the session context or use a short identifier.
 
 ### Step 3: Watch Thread
 ```
