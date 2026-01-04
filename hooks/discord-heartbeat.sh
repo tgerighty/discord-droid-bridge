@@ -5,7 +5,12 @@
 
 set -euo pipefail
 
-HEARTBEAT_INTERVAL="${DISCORD_HEARTBEAT_INTERVAL:-60}"  # seconds between messages
+# Validate and set heartbeat interval (security: prevent malicious values)
+HEARTBEAT_INTERVAL="${DISCORD_HEARTBEAT_INTERVAL:-60}"
+[[ ! "$HEARTBEAT_INTERVAL" =~ ^[0-9]+$ ]] && HEARTBEAT_INTERVAL=60
+[[ "$HEARTBEAT_INTERVAL" -lt 10 ]] && HEARTBEAT_INTERVAL=10      # minimum 10s
+[[ "$HEARTBEAT_INTERVAL" -gt 600 ]] && HEARTBEAT_INTERVAL=600    # maximum 10min
+
 HEARTBEAT_PID_FILE="$HOME/.factory/discord-heartbeat.pid"
 HEARTBEAT_STATE_FILE="$HOME/.factory/discord-heartbeat-state.json"
 
@@ -44,6 +49,7 @@ start_heartbeat() {
     
     # Start background heartbeat loop
     (
+        trap 'exit 0' TERM INT
         local msg_count=0
         while true; do
             sleep "$HEARTBEAT_INTERVAL"

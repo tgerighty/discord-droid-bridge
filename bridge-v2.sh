@@ -158,8 +158,8 @@ main() {
     cleanup_dead_sessions
     process_inbox
     
-    # Watch for inbox changes with fswatch (handle create/rename)
-    fswatch -o --event Updated --event Created --event Renamed "$FACTORY_DIR" 2>/dev/null | while read -r _; do
+    # Watch for inbox changes with fswatch - narrow scope to inbox file only
+    fswatch -o --event Updated --event Created --event Renamed "$INBOX_FILE" 2>/dev/null | while read -r _; do
         process_inbox
     done
 }

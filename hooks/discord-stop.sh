@@ -7,11 +7,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Secure temp file creation
-secure_temp() {
-    local private_tmp="${TMPDIR:-/tmp}/droid-bridge-$$"
-    mkdir -p "$private_tmp" && chmod 700 "$private_tmp"
-    mktemp "$private_tmp/XXXXXX"
+# Source shared config for secure_temp, get_current_thread_id, logging
+source "$SCRIPT_DIR/../lib/config.sh" 2>/dev/null || {
+    # Fallback if config.sh not found
+    secure_temp() {
+        local private_tmp="${TMPDIR:-/tmp}/droid-bridge-$$"
+        mkdir -p "$private_tmp" && chmod 700 "$private_tmp"
+        mktemp "$private_tmp/XXXXXX"
+    }
 }
 
 # Stop the heartbeat daemon (Droid finished responding)
@@ -22,15 +25,14 @@ transcript_path=$(echo "$input" | jq -r '.transcript_path // empty')
 
 [[ -z "$transcript_path" || ! -f "$transcript_path" ]] && exit 0
 
-thread_id=""
-if [[ -f "$HOME/.factory/current-discord-session" ]]; then
-    thread_id=$(cat "$HOME/.factory/current-discord-session")
+# Security: validate transcript path is under allowed directory
+if ! validate_path_prefix "$transcript_path" "$HOME/.factory" 2>/dev/null && \
+   ! validate_path_prefix "$transcript_path" "${TMPDIR:-/tmp}" 2>/dev/null; then
+    exit 0
 fi
 
-[[ -z "$thread_id" ]] && exit 0
-
-# Validate thread ID format
-[[ ! "$thread_id" =~ ^[0-9]{17,20}$ ]] && exit 0
+# Get and validate thread ID using shared function
+thread_id=$(get_current_thread_id 2>/dev/null) || exit 0
 
 message=$(jq -s -r 'map(select(.type=="message" and .message.role=="assistant"))
   | last

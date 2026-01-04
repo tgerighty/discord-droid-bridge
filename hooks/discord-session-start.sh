@@ -6,20 +6,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Source shared config for get_current_thread_id
+source "$SCRIPT_DIR/../lib/config.sh" 2>/dev/null || true
+
 # Read hook input from stdin
 input=$(cat)
 
-# Get the current Discord thread (if any)
-thread_id=""
-if [[ -f "$HOME/.factory/current-discord-session" ]]; then
-    thread_id=$(cat "$HOME/.factory/current-discord-session")
-fi
-
-# No active Discord session, nothing to do
-[[ -z "$thread_id" ]] && exit 0
-
-# Validate thread ID
-[[ ! "$thread_id" =~ ^[0-9]{17,20}$ ]] && exit 0
+# Get and validate thread ID using shared function
+thread_id=$(get_current_thread_id 2>/dev/null) || exit 0
 
 # Start the heartbeat daemon
 "$SCRIPT_DIR/discord-heartbeat.sh" start "$thread_id" >/dev/null 2>&1 || true

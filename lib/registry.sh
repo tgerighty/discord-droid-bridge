@@ -138,15 +138,6 @@ register_session() {
     echo "✓ Registered: thread=$thread_id tty=$current_tty pid=$pid"
 }
 
-# Alias for backward compatibility with bridge auto-registration
-register_session_with_tty() {
-    local thread_id="$1"
-    local thread_name="${2:-}"
-    local provided_tty="$3"
-    local pid="${4:-}"
-    register_session "$thread_id" "$thread_name" "$provided_tty" "$pid"
-}
-
 # Deregister a session
 # Usage: deregister_session <threadId>
 deregister_session() {
@@ -184,6 +175,7 @@ get_session() {
 }
 
 # Clean up sessions with dead PIDs (batch operation)
+# Optimized: single jq call to get all tid:pid pairs, batch deletion
 # Usage: cleanup_dead_sessions
 cleanup_dead_sessions() {
     [[ ! -f "$SESSIONS_FILE" ]] && return 0
@@ -191,32 +183,40 @@ cleanup_dead_sessions() {
     local lockfile="$SESSIONS_FILE.lock"
     local removed=0
     local sessions_data
-    local modified=false
+    local dead_tids=""
     
     (
         acquire_lock "$lockfile" 200
         
         sessions_data=$(cat "$SESSIONS_FILE")
         
-        for tid in $(echo "$sessions_data" | jq -r '.sessions | keys[]' 2>/dev/null); do
-            local pid
-            pid=$(echo "$sessions_data" | jq -r --arg tid "$tid" '.sessions[$tid].pid')
+        # Single jq call to extract all tid:pid pairs
+        while IFS=$'\t' read -r tid pid; do
+            [[ -z "$tid" ]] && continue
             
             # Validate PID is numeric before kill check
             if [[ -n "$pid" && "$pid" != "null" && "$pid" =~ ^[0-9]+$ ]]; then
                 if ! kill -0 "$pid" 2>/dev/null; then
-                    sessions_data=$(echo "$sessions_data" | jq --arg tid "$tid" 'del(.sessions[$tid])')
+                    # Collect dead thread IDs
+                    dead_tids="$dead_tids $tid"
                     ((removed++)) || true
-                    modified=true
                 fi
             fi
-        done
+        done < <(echo "$sessions_data" | jq -r '.sessions | to_entries[] | [.key, .value.pid] | @tsv' 2>/dev/null)
         
-        # Single write for all deletions
-        if [[ "$modified" == "true" ]]; then
+        # Single jq call to remove all dead sessions
+        if [[ $removed -gt 0 ]]; then
             local tmp
             tmp=$(secure_temp)
-            echo "$sessions_data" > "$tmp"
+            
+            # Build jq filter to delete all dead sessions at once
+            local filter=".sessions"
+            for tid in $dead_tids; do
+                filter="$filter | del(.[\"$tid\"])"
+            done
+            
+            echo "$sessions_data" | jq ".sessions = ($filter)" > "$tmp"
+            
             if jq empty "$tmp" 2>/dev/null; then
                 mv "$tmp" "$SESSIONS_FILE"
                 echo "Cleaned up $removed dead session(s)"
