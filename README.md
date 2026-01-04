@@ -23,6 +23,7 @@ Session Registry → bridge-v2.sh → iTerm2 (direct TTY write, no focus steal)
 - **Auto-registration** - Skill handles session setup automatically
 - **Session resume** - Reconnect to previous threads after terminal restart
 - **Heartbeat feedback** - Periodic "still working" messages during long tasks
+- **LaunchAgent support** - Auto-start on login, auto-restart on crash
 
 ## Prerequisites
 
@@ -85,7 +86,15 @@ export PATH="$HOME/path/to/discord-droid-bridge/bin:$PATH"
 # Export TTY for Droid (add to ~/.zshrc)
 # This enables bridge auto-registration when a thread is created but not registered.
 export DROID_TTY=$(tty 2>/dev/null || echo "")
+
+# Install as background service (recommended)
+droid-discord install
 ```
+
+This installs the bridge as a macOS LaunchAgent that:
+- Auto-starts on login
+- Auto-restarts on crash
+- Runs independently of terminal sessions
 
 ### 5. Install Skill
 
@@ -229,7 +238,12 @@ droid-discord status                      # Show current session
 droid-discord list                        # List all sessions
 droid-discord last                        # Show last used thread ID
 
-# Bridge control
+# Service management (recommended)
+droid-discord install                     # Install as macOS LaunchAgent
+droid-discord uninstall                   # Uninstall LaunchAgent
+droid-discord service-status              # Show LaunchAgent status
+
+# Manual bridge control (if not using LaunchAgent)
 droid-discord start                       # Start bridge (foreground)
 droid-discord start-bg                    # Start bridge (background)
 droid-discord stop                        # Stop bridge

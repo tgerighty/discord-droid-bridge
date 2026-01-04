@@ -1,0 +1,5 @@
+#!/bin/bash
+# Discord-Droid Bridge Daemon
+# This wrapper exists to give the process a recognizable name in macOS
+
+exec "$(dirname "$0")/../bridge-v2.sh" "$@"

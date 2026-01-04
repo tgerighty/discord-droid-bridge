@@ -12,6 +12,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$SCRIPT_DIR/lib/config.sh"
 source "$SCRIPT_DIR/lib/registry.sh"
 
+PLIST_NAME="com.droid.discord-bridge"
+PLIST_SRC="$SCRIPT_DIR/$PLIST_NAME.plist"
+PLIST_DEST="$HOME/Library/LaunchAgents/$PLIST_NAME.plist"
+INSTALL_DIR="$HOME/.factory/discord-bridge"
+
 usage() {
     cat <<EOF
 Discord-Droid Bridge CLI (V2 - iTerm2 only)
@@ -34,11 +39,16 @@ Bridge Commands:
   cleanup                     Remove sessions with dead PIDs
   send <threadId> [message]   Send a message to a Discord thread (stdin if omitted)
 
+Service Commands:
+  install                     Install as macOS LaunchAgent (auto-start on login)
+  uninstall                   Uninstall LaunchAgent
+  service-status              Show LaunchAgent status
+
 Examples:
   droid-discord register 1234567890123456789 "[myproject:main]"
   droid-discord resume                        # Resume last thread
   droid-discord resume 1234567890123456789    # Resume specific thread
-  droid-discord start-bg
+  droid-discord install                       # Install as background service
   droid-discord status
   droid-discord send 1234567890123456789 "Hello from Droid"
 EOF
@@ -310,19 +320,136 @@ cmd_send() {
     send_discord_message "$thread_id" "$message"
 }
 
+cmd_install() {
+    echo "Installing Discord-Droid Bridge as LaunchAgent..."
+    
+    # Create install directory and copy files
+    mkdir -p "$INSTALL_DIR/bin"
+    cp -r "$SCRIPT_DIR/bridge-v2.sh" "$INSTALL_DIR/"
+    cp -r "$SCRIPT_DIR/lib" "$INSTALL_DIR/"
+    cp "$SCRIPT_DIR/bin/discord-bridge-daemon" "$INSTALL_DIR/bin/"
+    chmod +x "$INSTALL_DIR/bridge-v2.sh" "$INSTALL_DIR/bin/discord-bridge-daemon"
+    
+    # Create LaunchAgents directory if needed
+    mkdir -p "$HOME/Library/LaunchAgents"
+    
+    # Stop existing service if running
+    launchctl unload "$PLIST_DEST" 2>/dev/null || true
+    
+    # Generate plist with correct paths (not hardcoded)
+    cat > "$PLIST_DEST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$PLIST_NAME</string>
+    
+    <key>Program</key>
+    <string>$INSTALL_DIR/bin/discord-bridge-daemon</string>
+    
+    <key>RunAtLoad</key>
+    <true/>
+    
+    <key>KeepAlive</key>
+    <true/>
+    
+    <key>StandardOutPath</key>
+    <string>/tmp/discord-bridge.log</string>
+    
+    <key>StandardErrorPath</key>
+    <string>/tmp/discord-bridge.err</string>
+    
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>$HOME</string>
+    </dict>
+    
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+</dict>
+</plist>
+EOF
+    
+    launchctl load "$PLIST_DEST"
+    
+    echo "✓ Installed to $INSTALL_DIR"
+    echo "✓ LaunchAgent loaded: $PLIST_NAME"
+    echo ""
+    echo "Bridge will now auto-start on login and restart on crash."
+    echo "Use 'droid-discord service-status' to check status."
+}
+
+cmd_uninstall() {
+    echo "Uninstalling Discord-Droid Bridge LaunchAgent..."
+    
+    # Unload and remove plist
+    if [[ -f "$PLIST_DEST" ]]; then
+        launchctl unload "$PLIST_DEST" 2>/dev/null || true
+        rm -f "$PLIST_DEST"
+        echo "✓ LaunchAgent unloaded and removed"
+    else
+        echo "LaunchAgent not installed"
+    fi
+    
+    # Optionally remove install directory
+    if [[ -d "$INSTALL_DIR" ]]; then
+        read -p "Remove $INSTALL_DIR? [y/N] " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            rm -rf "$INSTALL_DIR"
+            echo "✓ Install directory removed"
+        fi
+    fi
+}
+
+cmd_service_status() {
+    echo "LaunchAgent: $PLIST_NAME"
+    echo ""
+    
+    if [[ -f "$PLIST_DEST" ]]; then
+        echo "Installed: yes"
+        if launchctl list | grep -q "$PLIST_NAME"; then
+            local pid
+            pid=$(launchctl list | grep "$PLIST_NAME" | awk '{print $1}')
+            if [[ "$pid" != "-" && -n "$pid" ]]; then
+                echo "Status: running (PID: $pid)"
+            else
+                echo "Status: loaded but not running"
+            fi
+        else
+            echo "Status: not loaded"
+        fi
+    else
+        echo "Installed: no"
+        echo ""
+        echo "Run 'droid-discord install' to install as a background service."
+    fi
+    
+    echo ""
+    echo "Logs: /tmp/discord-bridge.log"
+    echo "Errors: /tmp/discord-bridge.err"
+}
+
 case "${1:-}" in
-    register)    shift; cmd_register "$@" ;;
-    resume)      shift; cmd_resume "$@" ;;
-    deregister)  shift; cmd_deregister "$@" ;;
-    status)      cmd_status ;;
-    list)        cmd_list ;;
-    last)        cmd_last ;;
-    cleanup)     cmd_cleanup ;;
-    start)       cmd_start ;;
-    start-bg)    cmd_start_bg ;;
-    stop)        cmd_stop ;;
-    logs)        cmd_logs ;;
-    send)        shift; cmd_send "$@" ;;
+    register)       shift; cmd_register "$@" ;;
+    resume)         shift; cmd_resume "$@" ;;
+    deregister)     shift; cmd_deregister "$@" ;;
+    status)         cmd_status ;;
+    list)           cmd_list ;;
+    last)           cmd_last ;;
+    cleanup)        cmd_cleanup ;;
+    start)          cmd_start ;;
+    start-bg)       cmd_start_bg ;;
+    stop)           cmd_stop ;;
+    logs)           cmd_logs ;;
+    send)           shift; cmd_send "$@" ;;
+    install)        cmd_install ;;
+    uninstall)      cmd_uninstall ;;
+    service-status) cmd_service_status ;;
     -h|--help|help|"") usage ;;
-    *)           echo "Unknown: $1"; usage; exit 1 ;;
+    *)              echo "Unknown: $1"; usage; exit 1 ;;
 esac
