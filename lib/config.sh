@@ -142,7 +142,12 @@ get_current_thread_id() {
 validate_path_prefix() {
     local path="$1"
     local prefix="$2"
-    [[ "$path" == "$prefix"* ]]
+    
+    # Reject path traversal attempts
+    [[ "$path" == *".."* ]] && return 1
+    
+    # Must match prefix exactly OR prefix followed by /
+    [[ "$path" == "$prefix" || "$path" == "$prefix/"* ]]
 }
 
 
