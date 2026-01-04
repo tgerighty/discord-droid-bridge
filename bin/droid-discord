@@ -64,8 +64,10 @@ normalize_discord_token() {
     # Trim whitespace
     token="${token#"${token%%[![:space:]]*}"}"
     token="${token%"${token##*[![:space:]]}"}"
-    # Remove "Bot " prefix if present (case-insensitive)
-    if [[ "${token,,}" == bot\ * ]]; then
+    # Remove "Bot " prefix if present (case-insensitive, Bash 3.2 compatible)
+    local lower_token
+    lower_token=$(printf '%s' "$token" | tr '[:upper:]' '[:lower:]')
+    if [[ "$lower_token" == bot\ * ]]; then
         token="${token:4}"
     fi
     printf '%s' "$token"
