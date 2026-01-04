@@ -241,7 +241,7 @@ list_sessions() {
 # Show current session status
 # Usage: show_session_status
 show_session_status() {
-    if [[ -n "$DROID_THREAD_ID" ]]; then
+    if [[ -n "${DROID_THREAD_ID:-}" ]]; then
         echo "Current thread: $DROID_THREAD_ID"
         local session=$(get_session "$DROID_THREAD_ID")
         if [[ "$session" != "null" ]]; then
